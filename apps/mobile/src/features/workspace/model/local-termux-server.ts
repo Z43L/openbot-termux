@@ -4,7 +4,13 @@ import {
   CHANNEL_TASK_CANCEL_CAPABILITY,
 } from "@openbot/contracts/ipc";
 import { isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
+import { AGENT_TASKS_CAPABILITY } from "@openbot/contracts/team-protocol/agent-tasks-v1";
+import { AGENT_THREAD_BRANCHES_CAPABILITY } from "@openbot/contracts/team-protocol/agent-thread-branches-v1";
+import { AGENT_THREAD_FILES_CAPABILITY } from "@openbot/contracts/team-protocol/agent-thread-files-v1";
+import { AGENT_THREAD_READS_CAPABILITY } from "@openbot/contracts/team-protocol/agent-thread-reads-v1";
+import { AGENT_THREADS_CAPABILITY } from "@openbot/contracts/team-protocol/agent-threads-v1";
 import { TEAM_AGENT_CREATE_MODEL_CAPABILITY } from "@openbot/contracts/team-protocol/current";
+import { WORKFLOWS_CAPABILITY } from "@openbot/contracts/team-protocol/workflows-v1";
 import * as SecureStore from "expo-secure-store";
 import { currentText } from "@/shared/lib/text";
 
@@ -21,6 +27,12 @@ export const LOCAL_TERMUX_CAPABILITIES: readonly string[] = [
   CHANNEL_CHATS_CAPABILITY,
   CHANNEL_DELETE_CAPABILITY,
   CHANNEL_TASK_CANCEL_CAPABILITY,
+  AGENT_TASKS_CAPABILITY,
+  AGENT_THREADS_CAPABILITY,
+  AGENT_THREAD_READS_CAPABILITY,
+  AGENT_THREAD_FILES_CAPABILITY,
+  AGENT_THREAD_BRANCHES_CAPABILITY,
+  WORKFLOWS_CAPABILITY,
 ];
 
 const STORE_KEY = "openbot.mobile.local-termux-servers.v1";

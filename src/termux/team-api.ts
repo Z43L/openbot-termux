@@ -10,12 +10,20 @@ import { Effect } from "effect";
 import { AgentDuplicationFailed } from "../backend/agent/duplication-gate";
 import type { AgentService } from "../backend/agent-service";
 import { StoredStateFailure } from "../backend/stored-state-effects";
-import type { TeamApiSidebarLayout } from "../main/team-api/dependencies";
+import type { TeamApiSidebarLayout, TeamApiWorkflows } from "../main/team-api/dependencies";
 import { HttpError } from "../main/team-api/http-error";
 import type { TeamApiRequestContext } from "../main/team-api/request-context";
 import { requestCapabilities, requestProtocol } from "../main/team-api/request-helpers";
+import { routeAgentTasks } from "../main/team-api/route-agent-tasks";
+import {
+  routeAgentThreadBranches,
+  routeAgentThreadFiles,
+  routeAgentThreadReads,
+  routeAgentThreads,
+} from "../main/team-api/route-agent-threads";
 import { routeAgents } from "../main/team-api/route-agents";
 import { routeChannels } from "../main/team-api/route-channels";
+import { routeWorkflows } from "../main/team-api/route-workflows";
 
 const logger = createOpenBotLogger("termux-team-api");
 
@@ -68,6 +76,7 @@ export async function handleTeamRequest(
   response: ServerResponse,
   url: URL,
   agents: AgentService,
+  workflows: TeamApiWorkflows,
 ): Promise<void> {
   const method = request.method ?? "GET";
   // The phone names its protocol and capabilities in headers, as a remote server's client does.
@@ -106,9 +115,7 @@ export async function handleTeamRequest(
     },
   };
   try {
-    const outcome = isChannelRoute(url.pathname)
-      ? await routeChannels(context, agents.channels, agents)
-      : await routeAgents(context, { agents, sidebarLayout, duplicateAgent });
+    const outcome = await route(context, agents, workflows);
     if (outcome === "unmatched")
       writeBody(response, 404, JSON.stringify({ error: sourceText("error.team.routeNotFound") }));
   } catch (error) {
@@ -121,4 +128,26 @@ export async function handleTeamRequest(
     if (response.headersSent) response.destroy();
     else writeBody(response, status, JSON.stringify({ error: message }));
   }
+}
+
+const NO_HIDDEN_AGENTS: ReadonlySet<string> = new Set();
+
+/** The route modules of the desktop router that the Termux services can answer, in its order. */
+async function route(
+  context: TeamApiRequestContext,
+  agents: AgentService,
+  workflows: TeamApiWorkflows,
+): Promise<"handled" | "unmatched"> {
+  if (isChannelRoute(context.url.pathname)) return routeChannels(context, agents.channels, agents);
+  for (const module of [
+    () => routeAgentTasks(context, agents, NO_HIDDEN_AGENTS),
+    () => routeAgentThreads(context, agents, NO_HIDDEN_AGENTS),
+    () => routeAgentThreadReads(context, agents, NO_HIDDEN_AGENTS),
+    () => routeAgentThreadFiles(context, agents, NO_HIDDEN_AGENTS),
+    () => routeAgentThreadBranches(context, agents, NO_HIDDEN_AGENTS),
+    () => routeWorkflows(context, workflows, agents, NO_HIDDEN_AGENTS),
+  ]) {
+    if ((await module()) === "handled") return "handled";
+  }
+  return routeAgents(context, { agents: agents, sidebarLayout, duplicateAgent });
 }

@@ -22,6 +22,7 @@ import { AgentStore } from "../backend/agent-store";
 import { MailboxStore } from "../backend/mailbox-store";
 import { DisabledBrowserHost } from "./disabled-browser-host";
 import { handleTeamRequest } from "./team-api";
+import { createTermuxWorkflows, type TermuxWorkflows } from "./workflows";
 
 const logger = createOpenBotLogger("termux-server");
 const HOST = "127.0.0.1";
@@ -33,6 +34,7 @@ const TOKEN_FILE = "server-token";
 interface ServerState {
   agents: AgentStore;
   service: AgentService;
+  workflows: TermuxWorkflows;
   server: Server;
   token: Buffer;
   port: number;
@@ -57,6 +59,7 @@ async function main(): Promise<void> {
   const mailbox = new MailboxStore(dataDirectory, agents.sharedRoot, agents.database);
   const service = new AgentService({ store: agents, mailbox, browser: new DisabledBrowserHost() });
   await Effect.runPromise(service.initialize());
+  const workflows = await Effect.runPromise(createTermuxWorkflows(agents, mailbox, service));
   const token = await loadToken(join(dataDirectory, TOKEN_FILE));
   const server = createServer((request, response) => {
     void handleRequest(request, response, state).catch((error: unknown) => {
@@ -72,6 +75,7 @@ async function main(): Promise<void> {
   const state: ServerState = {
     agents,
     service,
+    workflows,
     server,
     token,
     port: DEFAULT_PORT,
@@ -147,12 +151,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
     return;
   }
 
-  if (path === "/v1/agents" || path.startsWith("/v1/agents/") || path.startsWith("/v1/channels")) {
+  if (path.startsWith("/v1/")) {
     await handleTeamRequest(
       request,
       response,
       new URL(request.url ?? "/", `http://${HOST}:${state.port}`),
       state.service,
+      state.workflows,
     );
     return;
   }
@@ -434,6 +439,7 @@ async function shutdown(state: ServerState, signal: NodeJS.Signals): Promise<voi
   state.webSocketClients.clear();
   state.webSocketServer.close();
   await new Promise<void>((resolve) => state.server.close(() => resolve()));
+  await Effect.runPromise(state.workflows.close());
   await Effect.runPromise(state.service.stop());
   state.agents.database.close();
 }

@@ -1,6 +1,4 @@
 import { isDynamicRecord } from "@openbot/contracts/runtime-values";
-import { TEAM_API_ROUTES } from "@openbot/contracts/team-api-routes";
-import { isChannelRoute } from "@openbot/contracts/team-protocol/channels-v1";
 import { TEAM_AGENT_CREATE_MODEL_CAPABILITY } from "@openbot/contracts/team-protocol/current";
 import { teamHttpCodec } from "@openbot/contracts/team-protocol/http-codecs";
 import { teamSideRouteCodec } from "@openbot/contracts/team-protocol/side-routes";
@@ -96,11 +94,9 @@ export class LocalTermuxTransport implements RemoteTeamTransportRef {
   }
 }
 
+/** The server answers the Team API routes that its services can serve, and refuses the rest with a 404. */
 function isServedRoute(path: string): boolean {
-  const base = path.split("?", 1)[0] ?? path;
-  return (
-    base === TEAM_API_ROUTES.agents.all || base.startsWith(`${TEAM_API_ROUTES.agents.all}/`) || isChannelRoute(path)
-  );
+  return path.startsWith("/v1/");
 }
 
 function isHealthy(value: unknown): boolean {

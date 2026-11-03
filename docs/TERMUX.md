@@ -64,6 +64,13 @@ Available routes:
 - `POST /api/agents/:id/messages`
 - `GET /api/events` (authenticated SSE endpoint and WebSocket upgrade for AgentService events)
 
+The `/v1/` routes are the Team API routes of the desktop host, served by the same route code over
+HTTP on loopback. A phone names its protocol and capabilities in the `OpenBot-Protocol-Version` and
+`OpenBot-Capabilities` headers. Served: agents (create with provider and model, models, status,
+usage, conversation, queue), channels, threads (`agent-tasks-v1`, `agent-threads-v1`, reads, files,
+branches) and workflows. Workflow runs start by hand; schedule, GitHub and webhook triggers are not
+started, because Termux has no relay. Sections, files, the browser and members are not served.
+
 The API reuses OpenBot service methods and schemas for agent operations. It is not the released Team
 API and does not claim Team API wire compatibility. The local mobile transport uses its authenticated
 WebSocket event stream. OpenBot Local is separate from official cloud hosts. See
