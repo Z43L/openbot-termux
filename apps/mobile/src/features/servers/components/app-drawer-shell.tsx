@@ -125,13 +125,15 @@ export function AppDrawerShell({ children }: PropsWithChildren) {
     drawerProgress.set(withSpring(0, DRAWER_SPRING, finishClosing));
   }, [drawerOpenOnUI, drawerProgress, finishClosing]);
 
+  // The drawer works with an account or with a local server. With neither, it has nothing to show.
+  const hasDrawer = Boolean(session) || servers.length > 0;
   useEffect(() => {
-    if (session) return;
+    if (hasDrawer) return;
     drawerOpenOnUI.set(false);
     setDrawerOpen(false);
     setDrawerSettled(false);
     drawerProgress.set(0);
-  }, [drawerOpenOnUI, drawerProgress, session]);
+  }, [drawerOpenOnUI, drawerProgress, hasDrawer]);
 
   // The phase changes only at the closed and open places, so React renders twice for each motion and
   // not on each frame.
@@ -278,7 +280,7 @@ export function AppDrawerShell({ children }: PropsWithChildren) {
     [closeDrawer, openDrawer, openingGesture],
   );
 
-  if (!session) {
+  if (!hasDrawer) {
     return <AppDrawerContext.Provider value={contextValue}>{children}</AppDrawerContext.Provider>;
   }
 

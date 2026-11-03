@@ -1,3 +1,8 @@
+import {
+  CHANNEL_CHATS_CAPABILITY,
+  CHANNEL_DELETE_CAPABILITY,
+  CHANNEL_TASK_CANCEL_CAPABILITY,
+} from "@openbot/contracts/ipc";
 import { isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
 import { TEAM_AGENT_CREATE_MODEL_CAPABILITY } from "@openbot/contracts/team-protocol/current";
 import * as SecureStore from "expo-secure-store";
@@ -11,7 +16,12 @@ export interface LocalTermuxServerConfig {
 }
 
 /** What the phone asks the Termux server to use, in the headers of each agent request. */
-export const LOCAL_TERMUX_CAPABILITIES: readonly string[] = [TEAM_AGENT_CREATE_MODEL_CAPABILITY];
+export const LOCAL_TERMUX_CAPABILITIES: readonly string[] = [
+  TEAM_AGENT_CREATE_MODEL_CAPABILITY,
+  CHANNEL_CHATS_CAPABILITY,
+  CHANNEL_DELETE_CAPABILITY,
+  CHANNEL_TASK_CANCEL_CAPABILITY,
+];
 
 const STORE_KEY = "openbot.mobile.local-termux-servers.v1";
 const TOKEN_PREFIX = "openbot.mobile.local-termux-token.";

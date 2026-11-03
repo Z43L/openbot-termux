@@ -1,7 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { DuplicateAgentResult, TeamMemberSummary } from "@openbot/contracts/ipc";
+import { isChannelRoute } from "@openbot/contracts/team-protocol/channels-v1";
 import { supportsTeamSemanticTags } from "@openbot/contracts/team-protocol/current";
 import { teamHttpCodec } from "@openbot/contracts/team-protocol/http-codecs";
+import { teamSideRouteCodec } from "@openbot/contracts/team-protocol/side-routes";
 import { isFixedSourceText, sourceText } from "@openbot/i18n/source";
 import { createOpenBotLogger, toLogValue } from "@openbot/logging";
 import { Effect } from "effect";
@@ -13,6 +15,7 @@ import { HttpError } from "../main/team-api/http-error";
 import type { TeamApiRequestContext } from "../main/team-api/request-context";
 import { requestCapabilities, requestProtocol } from "../main/team-api/request-helpers";
 import { routeAgents } from "../main/team-api/route-agents";
+import { routeChannels } from "../main/team-api/route-channels";
 
 const logger = createOpenBotLogger("termux-team-api");
 
@@ -59,8 +62,8 @@ function writeBody(response: ServerResponse, status: number, body: string): void
   response.end(`${body}\n`);
 }
 
-/** Answers one authenticated `/v1/agents...` request with the host's own agent routes. */
-export async function handleTeamAgentRequest(
+/** Answers one authenticated `/v1/agents...` or `/v1/channels...` request with the host's own routes. */
+export async function handleTeamRequest(
   request: IncomingMessage,
   response: ServerResponse,
   url: URL,
@@ -72,12 +75,14 @@ export async function handleTeamAgentRequest(
   const capabilities = requestCapabilities(request);
   const json = (status: number, value: object | null): "handled" => {
     // The body is encoded before the head is written, so a value the protocol cannot represent is a 500.
+    const options = { preserveSemanticTags: supportsTeamSemanticTags(capabilities) };
+    const sideRoute = teamSideRouteCodec(url.pathname);
     writeBody(
       response,
       status,
-      teamHttpCodec(protocol).encodeResponse(method, url.pathname, status, value, {
-        preserveSemanticTags: supportsTeamSemanticTags(capabilities),
-      }),
+      sideRoute
+        ? JSON.stringify(sideRoute.response(url.pathname, status, value))
+        : teamHttpCodec(protocol).encodeResponse(method, url.pathname, status, value, options),
     );
     return "handled";
   };
@@ -101,7 +106,9 @@ export async function handleTeamAgentRequest(
     },
   };
   try {
-    const outcome = await routeAgents(context, { agents, sidebarLayout, duplicateAgent });
+    const outcome = isChannelRoute(url.pathname)
+      ? await routeChannels(context, agents.channels, agents)
+      : await routeAgents(context, { agents, sidebarLayout, duplicateAgent });
     if (outcome === "unmatched")
       writeBody(response, 404, JSON.stringify({ error: sourceText("error.team.routeNotFound") }));
   } catch (error) {

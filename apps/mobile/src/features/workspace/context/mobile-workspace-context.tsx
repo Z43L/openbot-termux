@@ -970,6 +970,7 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
         const capabilities = [...LOCAL_TERMUX_CAPABILITIES];
         serverCapabilities.current.set(serverId, capabilities);
         channelStore.configure(serverId, capabilities);
+        void channelStore.refresh(serverId);
         const reads = startWorkspaceReads(client, capabilities);
         const summaries = await reads.agents;
         if (!context.isCurrent()) return;

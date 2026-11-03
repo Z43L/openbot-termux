@@ -21,7 +21,7 @@ import { AgentService } from "../backend/agent-service";
 import { AgentStore } from "../backend/agent-store";
 import { MailboxStore } from "../backend/mailbox-store";
 import { DisabledBrowserHost } from "./disabled-browser-host";
-import { handleTeamAgentRequest } from "./team-api";
+import { handleTeamRequest } from "./team-api";
 
 const logger = createOpenBotLogger("termux-server");
 const HOST = "127.0.0.1";
@@ -147,8 +147,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
     return;
   }
 
-  if (path === "/v1/agents" || path.startsWith("/v1/agents/")) {
-    await handleTeamAgentRequest(
+  if (path === "/v1/agents" || path.startsWith("/v1/agents/") || path.startsWith("/v1/channels")) {
+    await handleTeamRequest(
       request,
       response,
       new URL(request.url ?? "/", `http://${HOST}:${state.port}`),

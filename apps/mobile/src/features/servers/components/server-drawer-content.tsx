@@ -72,7 +72,8 @@ interface ServerDrawerContentProps {
   /** True after the drawer has opened: the drawer then reads its values from the host. */
   open: boolean;
   servers: MobileServer[];
-  session: MobileSession;
+  /** Null on a phone with a local server and no account: the drawer then shows the server, not a user. */
+  session: MobileSession | null;
   /** The drawer's left padding. The header blur reaches over it to the screen edge. */
   sideInset: number;
   topInset: number;
@@ -126,8 +127,6 @@ export const ServerDrawerContent = memo(function ServerDrawerContent({
   // Android: the row's own long press opens its menu, as on the agent rows. `shouldOpenOnLongPress`
   // does not open it there, because the row takes the long press.
   const menus = useRef(new Map<string, MenuComponentRef | null>());
-  const displayName = mobileUserName(session.user);
-  const avatarUrl = session.user.avatarUrl ? new URL(session.user.avatarUrl, session.apiUrl).toString() : null;
   const mutedColor = String(muted);
   const [editing, setEditing] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -136,13 +135,15 @@ export const ServerDrawerContent = memo(function ServerDrawerContent({
   // The iOS menu host sizes to its content, so a row in a menu gets the slot width explicitly.
   const [rowWidth, setRowWidth] = useState<number>();
   const activeServer = servers.find((server) => server.id === activeServerId);
+  const displayName = session ? mobileUserName(session.user) : (activeServer?.name ?? "");
+  const avatarUrl = session?.user.avatarUrl ? new URL(session.user.avatarUrl, session.apiUrl).toString() : null;
   const serverIds = servers.map((server) => server.id);
   const canReorder = serverIds.length > 1;
   // Without an open server the list is the only content, so it stays open.
   const showsList = listOpen || editing || !activeServer;
   const memberCount = useDrawerMemberCount(activeServer?.id ?? "");
   const hostedServerIds = useHostedServerAvailability((state) =>
-    state.userId === session.user.id ? state.serverIds : null,
+    session && state.userId === session.user.id ? state.serverIds : null,
   );
   const exiting = useRef(false);
   // The same rules as the server settings screen. The owner cannot leave. Billing deletes a hosted
@@ -232,11 +233,13 @@ export const ServerDrawerContent = memo(function ServerDrawerContent({
 
   // The plus button opens the plans and the account's hosted servers when the account can have
   // hosted servers and the feature flag of this build is on. A development build can override both.
-  const accountHasPlans = useHostedServerAvailability((state) => state.userId === session.user.id && state.available);
-  const cloudServersOn = useMobileFeature(session.apiUrl, "cloudServers");
+  const accountHasPlans = useHostedServerAvailability(
+    (state) => session !== null && state.userId === session.user.id && state.available,
+  );
+  const cloudServersOn = useMobileFeature(session?.apiUrl ?? "", "cloudServers");
   const showsPlans = devFeatureOverride("cloudServers") ?? (accountHasPlans && cloudServersOn);
   useEffect(() => {
-    if (!open) return;
+    if (!open || !session) return;
     void refreshHostedServerAvailability(session.user.id, hostedServerCalls(session));
     void refreshMobileFeatures(session.apiUrl);
   }, [open, session]);
@@ -497,7 +500,7 @@ export const ServerDrawerContent = memo(function ServerDrawerContent({
               {displayName}
             </Typography.Paragraph>
             <Typography.Paragraph className="text-text-secondary" numberOfLines={1} selectable style={typeScale.small}>
-              {session.user.email}
+              {session ? session.user.email : activeServer?.address}
             </Typography.Paragraph>
           </View>
         </View>
