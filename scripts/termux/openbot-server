@@ -1,0 +1,15 @@
+#!/data/data/com.termux/files/usr/bin/sh
+set -eu
+
+root=${OPENBOT_TERMUX_ROOT:-"$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"}
+log() { printf '%s\n' "openbot-termux: $*" >&2; }
+
+if [ "${1:-}" = "--check" ]; then
+  command -v bun >/dev/null 2>&1 || { log "Bun is required to run the Termux backend."; exit 78; }
+  exec bun "$root/src/termux/main.ts" --check
+fi
+
+command -v bun >/dev/null 2>&1 || { log "Bun is required to run the Termux backend."; exit 78; }
+export LD_LIBRARY_PATH="${PREFIX:-/data/data/com.termux/files/usr}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+cd "$root"
+exec bun "$root/src/termux/main.ts"

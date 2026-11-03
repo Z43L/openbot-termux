@@ -1,0 +1,4 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# Runit retries failed services. Delay each retry to prevent a rapid failure loop.
+sleep 60
+exit 0

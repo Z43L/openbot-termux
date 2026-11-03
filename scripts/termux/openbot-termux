@@ -1,0 +1,37 @@
+#!/data/data/com.termux/files/usr/bin/sh
+set -eu
+
+action=${1:-help}
+prefix=${PREFIX:-/data/data/com.termux/files/usr}
+service_dir="$prefix/var/service/openbot"
+data_dir=${OPENBOT_TERMUX_DATA_DIR:-"$HOME/.local/share/openbot-termux"}
+
+fail() { printf 'openbot-termux: %s\n' "$*" >&2; exit 1; }
+
+case "$action" in
+  start|restart|status|stop|logs)
+    command -v sv >/dev/null 2>&1 || fail "sv is unavailable. Install and start termux-services first."
+    [ -d "$service_dir" ] || fail "The openbot service is not installed. Run scripts/termux/install."
+    ;;
+  *)
+    if [ "$action" = token ]; then
+      [ -f "$data_dir/server-token" ] || fail "The server token does not exist yet. Start the server first."
+      exec cat "$data_dir/server-token"
+    fi
+    printf '%s\n' 'Usage: openbot-termux {start|stop|restart|status|logs|token}'
+    exit 0
+    ;;
+esac
+
+case "$action" in
+  start) exec sv up "$service_dir" ;;
+  stop) exec sv down "$service_dir" ;;
+  restart) exec sv restart "$service_dir" ;;
+  status) exec sv status "$service_dir" ;;
+  logs)
+    log_dir="$HOME/.openbot-termux/log"
+    [ -d "$log_dir" ] || fail "No service log exists yet."
+    if command -v tail >/dev/null 2>&1; then exec tail -n 200 -F "$log_dir/current"; fi
+    exec cat "$log_dir/current"
+    ;;
+esac

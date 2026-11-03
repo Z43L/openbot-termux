@@ -1,0 +1,49 @@
+#!/data/data/com.termux/files/usr/bin/sh
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+prefix=${PREFIX:-/data/data/com.termux/files/usr}
+service_dir="$prefix/var/service/openbot"
+bin_dir="$prefix/bin"
+
+fail() { printf 'openbot-termux: %s\n' "$*" >&2; exit 1; }
+[ -x "$prefix/bin/sv" ] || fail "termux-services is not installed. Install it with pkg, then restart Termux."
+[ -x "$prefix/bin/svlogd" ] || fail "svlogd is unavailable. Install termux-services first."
+
+if [ -e "$service_dir" ] && [ ! -f "$service_dir/.openbot-termux-managed" ]; then
+  fail "The service path already exists and is not managed by this installer: $service_dir"
+fi
+mkdir -p "$service_dir/log" "$HOME/.openbot-termux/log" "$bin_dir"
+cat >"$service_dir/run" <<EOF
+#!/data/data/com.termux/files/usr/bin/sh
+export OPENBOT_TERMUX_ROOT="$root"
+export OPENBOT_TERMUX_DATA_DIR="$HOME/.local/share/openbot-termux"
+exec "$root/scripts/termux/openbot-server"
+EOF
+cp "$root/scripts/termux/service-finish" "$service_dir/finish"
+cp "$root/scripts/termux/log-run" "$service_dir/log/run"
+touch "$service_dir/.openbot-termux-managed"
+chmod 0700 "$service_dir/run" "$service_dir/finish" "$service_dir/log/run"
+printf '%s\n' 's1000000' 'n10' >"$service_dir/log/config"
+chmod 0600 "$service_dir/log/config"
+
+cat >"$bin_dir/openbot-termux" <<EOF
+#!/data/data/com.termux/files/usr/bin/sh
+exec "$root/scripts/termux/openbot-termux" "\$@"
+EOF
+chmod 0700 "$bin_dir/openbot-termux"
+
+if [ "${1:-}" = "--boot" ]; then
+  boot_dir="$HOME/.termux/boot"
+  mkdir -p "$boot_dir"
+  cat >"$boot_dir/10-openbot-services" <<'EOF'
+#!/data/data/com.termux/files/usr/bin/sh
+# Termux:Boot is a separate Android app. termux-services starts enabled runit services.
+. "$PREFIX/etc/profile.d/start-services.sh"
+EOF
+  chmod 0700 "$boot_dir/10-openbot-services"
+fi
+
+printf '%s\n' "Installed runit service at $service_dir" \
+  "The service runs the Electron-free Termux AgentService backend." \
+  "Use sv-enable openbot and sv up openbot to start it."

@@ -1,0 +1,414 @@
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import WebSocket, { WebSocketServer } from "ws";
+import { chmod, lstat, mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { type AgentEvent, type AgentSummary, isAgentModel, isAgentProvider, isAvatarHue, isAvatarSeed, isReasoningEffort } from "@openbot/contracts/ipc";
+import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
+import { createOpenBotLogger, toLogValue } from "@openbot/logging";
+import { Effect } from "effect";
+import { AgentStore } from "../backend/agent-store";
+import { AgentService } from "../backend/agent-service";
+import { MailboxStore } from "../backend/mailbox-store";
+import { isRecord } from "../backend/protocol";
+import { DisabledBrowserHost } from "./disabled-browser-host";
+
+const logger = createOpenBotLogger("termux-server");
+const HOST = "127.0.0.1";
+const DEFAULT_PORT = 8787;
+const MAX_BODY_BYTES = 8_192;
+const DEFAULT_DATA_DIRECTORY = join(homedir(), ".local", "share", "openbot-termux");
+const TOKEN_FILE = "server-token";
+
+interface ServerState {
+  agents: AgentStore;
+  service: AgentService;
+  server: Server;
+  token: Buffer;
+  port: number;
+  stopping: boolean;
+  eventClients: Set<ServerResponse>;
+  webSocketServer: WebSocketServer;
+  webSocketClients: Set<WebSocket>;
+}
+
+async function main(): Promise<void> {
+  if (process.argv.includes("--check")) {
+    process.stdout.write("Termux backend entry is available. It uses Bun and the original AgentStore.\n");
+    return;
+  }
+
+  const dataDirectory = process.env.OPENBOT_TERMUX_DATA_DIR ?? DEFAULT_DATA_DIRECTORY;
+  const openBotDirectory = process.env.OPENBOT_TERMUX_HOME ?? join(homedir(), "OpenBot-Termux");
+  await mkdir(dataDirectory, { recursive: true, mode: 0o700 });
+  await chmod(dataDirectory, 0o700);
+
+  const agents = new AgentStore(dataDirectory, homedir(), undefined, undefined, openBotDirectory);
+  const mailbox = new MailboxStore(dataDirectory, agents.sharedRoot, agents.database);
+  const service = new AgentService({ store: agents, mailbox, browser: new DisabledBrowserHost() });
+  await Effect.runPromise(service.initialize());
+  const token = await loadToken(join(dataDirectory, TOKEN_FILE));
+  const server = createServer((request, response) => {
+    void handleRequest(request, response, state).catch((error: unknown) => {
+      logger.error("A Termux API request failed.", toLogValue(error));
+      if (response.headersSent) response.destroy();
+      else writeJson(response, 503, { error: "backend_unavailable" });
+    });
+  });
+  const webSocketServer = new WebSocketServer({
+    noServer: true,
+    handleProtocols: (protocols) => (protocols.has("openbot-local") ? "openbot-local" : false),
+  });
+  const state: ServerState = {
+    agents,
+    service,
+    server,
+    token,
+    port: DEFAULT_PORT,
+    stopping: false,
+    eventClients: new Set(),
+    webSocketServer,
+    webSocketClients: new Set(),
+  };
+  server.on("upgrade", (request, socket, head) => {
+    const host = request.headers.host;
+    const origin = request.headers.origin;
+    const path = new URL(request.url ?? "/", `http://${HOST}:${state.port}`).pathname;
+    const failure =
+      host !== `127.0.0.1:${state.port}` && host !== `localhost:${state.port}`
+        ? "421 Misdirected Request"
+        : origin && origin !== `http://127.0.0.1:${state.port}` && origin !== `http://localhost:${state.port}`
+          ? "403 Forbidden"
+          : path !== "/api/events"
+            ? "404 Not Found"
+            : !authorizedWebSocket(request, state.token)
+              ? "401 Unauthorized"
+              : null;
+    if (failure) {
+      socket.write(`HTTP/1.1 ${failure}\r\nConnection: close\r\n\r\n`);
+      socket.destroy();
+      return;
+    }
+    webSocketServer.handleUpgrade(request, socket, head, (client) => {
+      state.webSocketClients.add(client);
+      client.once("close", () => state.webSocketClients.delete(client));
+    });
+  });
+  service.on("event", (event) => broadcastEvent(state, event));
+  state.port = await listen(server);
+  logger.info(`Termux API listening on ${HOST}:${state.port}.`);
+  process.stdout.write(`OpenBot Termux API: http://${HOST}:${state.port}\n`);
+
+  process.once("SIGINT", () => void shutdown(state, "SIGINT"));
+  process.once("SIGTERM", () => void shutdown(state, "SIGTERM"));
+}
+
+async function handleRequest(request: IncomingMessage, response: ServerResponse, state: ServerState): Promise<void> {
+  const host = request.headers.host;
+  if (host !== `127.0.0.1:${state.port}` && host !== `localhost:${state.port}`) {
+    writeJson(response, 421, { error: "invalid_host" });
+    return;
+  }
+  const origin = request.headers.origin;
+  if (origin && origin !== `http://127.0.0.1:${state.port}` && origin !== `http://localhost:${state.port}`) {
+    writeJson(response, 403, { error: "invalid_origin" });
+    return;
+  }
+
+  const path = new URL(request.url ?? "/", `http://${HOST}:${state.port}`).pathname;
+  if (request.method === "GET" && path === "/health") {
+    const result = state.agents.database.connection.prepare("PRAGMA quick_check").get();
+    const sqlite = result ? Object.values(result)[0] : null;
+    const providerStatus = state.service.getStatus().providers?.map(({ id, state: providerState }) => ({
+      id,
+      state: providerState,
+    }));
+    const healthy = sqlite === "ok";
+    writeJson(response, healthy ? 200 : 503, {
+      status: healthy ? "ok" : "failed",
+      backend: "openbot-agent-service",
+      dependencies: { agentService: "ready", agentStore: "ready", sqlite, providers: providerStatus ?? [] },
+    });
+    return;
+  }
+
+  if (!authorized(request, state.token)) {
+    writeJson(response, 401, { error: "unauthorized" }, { "www-authenticate": "Bearer" });
+    return;
+  }
+
+  if (request.method === "GET" && path === "/api/agents") {
+    writeJson(response, 200, { agents: state.service.listAgents() });
+    return;
+  }
+  if (request.method === "GET" && path === "/api/reads") {
+    writeJson(response, 200, state.service.listConversationReads("termux-local-owner"));
+    return;
+  }
+  if (request.method === "POST" && path === "/api/agents") {
+    const input = await readCreateInput(request);
+    if (!input) {
+      writeJson(response, 400, { error: "invalid_agent_input" });
+      return;
+    }
+    try {
+      const agent = input.initialMessage
+        ? await Effect.runPromise(state.service.createAgent({ ...input, initialMessage: input.initialMessage }))
+        : await Effect.runPromise(state.agents.createAgent(input));
+      state.service.emit("event", { type: "agents-changed", agents: state.service.listAgents() });
+      writeJson(response, 201, { agent });
+    } catch (error) {
+      logger.warn("An agent could not be created through the Termux API.", toLogValue(error));
+      writeJson(response, 500, { error: "agent_creation_failed" });
+    }
+    return;
+  }
+
+  if (request.method === "GET" && path === "/api/events") {
+    response.writeHead(200, {
+      "cache-control": "no-store",
+      "connection": "keep-alive",
+      "content-type": "text/event-stream; charset=utf-8",
+      "x-content-type-options": "nosniff",
+    });
+    response.write("event: ready\ndata: {}\n\n");
+    state.eventClients.add(response);
+    response.once("close", () => state.eventClients.delete(response));
+    return;
+  }
+
+  const agentRoute = /^\/api\/agents\/([A-Za-z0-9-]+)(?:\/(conversation|conversation-page|messages))?$/u.exec(path);
+  const agentId = agentRoute?.[1];
+  if (agentId && !state.service.listAgents().some((agent) => agent.id === agentId)) {
+    writeJson(response, 404, { error: "agent_not_found" });
+    return;
+  }
+  if (agentId && request.method === "GET" && agentRoute?.[2] === "conversation") {
+    const conversation = await Effect.runPromise(state.service.readConversation(agentId));
+    writeJson(response, 200, { conversation });
+    return;
+  }
+  if (agentId && request.method === "GET" && agentRoute?.[2] === "conversation-page") {
+    const limitText = new URL(request.url ?? "/", `http://${HOST}:${state.port}`).searchParams.get("limit");
+    const limit = limitText === null ? 50 : Number(limitText);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      writeJson(response, 400, { error: "invalid_limit" });
+      return;
+    }
+    const page = await Effect.runPromise(state.service.readConversationPageFor(agentId, "termux-local-owner", undefined, limit));
+    writeJson(response, 200, page);
+    return;
+  }
+  if (agentId && request.method === "POST" && agentRoute?.[2] === "messages") {
+    const body = await readJsonRecord(request);
+    const message = body?.text;
+    if (
+      (body?.attachmentDraftIds !== undefined &&
+        (!Array.isArray(body.attachmentDraftIds) || body.attachmentDraftIds.length > 0)) ||
+      (body?.replyToMessageId !== undefined && body.replyToMessageId !== null) ||
+      (body?.clientMessageId !== undefined && typeof body.clientMessageId !== "string")
+    ) {
+      writeJson(response, 501, { error: "unsupported_message_options" });
+      return;
+    }
+    if (typeof message !== "string" || message.trim().length === 0 || message.length > INPUT_LIMITS.messageText) {
+      writeJson(response, 400, { error: "invalid_message" });
+      return;
+    }
+    try {
+      const receipt = await Effect.runPromise(
+        state.service.sendMessage({
+          agentId,
+          text: message,
+          attachmentDraftIds: [],
+          clientMessageId: typeof body.clientMessageId === "string" ? body.clientMessageId : randomUUID(),
+        }),
+      );
+      writeJson(response, 202, { receipt });
+    } catch (error) {
+      logger.warn("An agent message could not be sent through the Termux API.", toLogValue(error));
+      writeJson(response, 503, { error: "agent_message_failed" });
+    }
+    return;
+  }
+
+  writeJson(response, 404, { error: "not_found" });
+}
+
+async function readJsonRecord(request: IncomingMessage): Promise<Record<string, unknown> | null> {
+  try {
+    const value: unknown = JSON.parse(await readBody(request));
+    return isRecord(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readCreateInput(request: IncomingMessage): Promise<{
+  name: string;
+  description: string;
+  avatarSeed: string;
+  avatarHue: AgentSummary["avatarHue"];
+  initialMessage?: string;
+  provider?: AgentSummary["provider"];
+  model?: AgentSummary["model"];
+  reasoningEffort?: AgentSummary["reasoningEffort"];
+} | null> {
+  const record = await readJsonRecord(request);
+  if (!record) return null;
+  if (
+    typeof record.name !== "string" ||
+    record.name.trim().length === 0 ||
+    record.name.length > INPUT_LIMITS.agentName ||
+    typeof record.description !== "string" ||
+    record.description.length > INPUT_LIMITS.agentDescription ||
+    !isAvatarSeed(record.avatarSeed) ||
+    !(record.avatarHue === null || isAvatarHue(record.avatarHue))
+  ) {
+    return null;
+  }
+  if (
+    (record.initialMessage !== undefined &&
+      (typeof record.initialMessage !== "string" ||
+        record.initialMessage.trim().length === 0 ||
+        record.initialMessage.length > INPUT_LIMITS.messageText)) ||
+    (record.provider !== undefined && !isAgentProvider(record.provider)) ||
+    (record.model !== undefined && !isAgentModel(record.model)) ||
+    (record.reasoningEffort !== undefined && !isReasoningEffort(record.reasoningEffort))
+  ) return null;
+  return {
+    name: record.name,
+    description: record.description,
+    avatarSeed: record.avatarSeed,
+    avatarHue: record.avatarHue,
+    ...(typeof record.initialMessage === "string" ? { initialMessage: record.initialMessage } : {}),
+    ...(isAgentProvider(record.provider) ? { provider: record.provider } : {}),
+    ...(isAgentModel(record.model) ? { model: record.model } : {}),
+    ...(isReasoningEffort(record.reasoningEffort) ? { reasoningEffort: record.reasoningEffort } : {}),
+  };
+}
+
+async function readBody(request: IncomingMessage): Promise<string> {
+  let size = 0;
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += bytes.length;
+    if (size > MAX_BODY_BYTES) throw new Error("body_too_large");
+    chunks.push(bytes);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function authorized(request: IncomingMessage, token: Buffer): boolean {
+  const value = request.headers.authorization;
+  if (!value?.startsWith("Bearer ")) return false;
+  const supplied = Buffer.from(value.slice("Bearer ".length));
+  return supplied.length === token.length && timingSafeEqual(supplied, token);
+}
+
+function authorizedWebSocket(request: IncomingMessage, token: Buffer): boolean {
+  const protocols = request.headers["sec-websocket-protocol"];
+  if (typeof protocols !== "string") return false;
+  const credential = protocols.split(",").map((value) => value.trim()).find((value) => value.startsWith("bearer."));
+  if (!credential) return false;
+  const supplied = Buffer.from(credential.slice("bearer.".length));
+  return supplied.length === token.length && timingSafeEqual(supplied, token);
+}
+
+function writeJson(
+  response: ServerResponse,
+  status: number,
+  value: unknown,
+  headers: Record<string, string> = {},
+): void {
+  response.writeHead(status, {
+    "cache-control": "no-store",
+    "content-type": "application/json; charset=utf-8",
+    "x-content-type-options": "nosniff",
+    ...headers,
+  });
+  response.end(JSON.stringify(value));
+}
+
+function broadcastEvent(state: ServerState, event: AgentEvent): void {
+  const message = `event: openbot\ndata: ${JSON.stringify(event)}\n\n`;
+  for (const response of state.eventClients) {
+    if (!response.write(message)) state.eventClients.delete(response);
+  }
+  const webSocketMessage = JSON.stringify(event);
+  for (const client of state.webSocketClients) {
+    if (client.readyState === WebSocket.OPEN) client.send(webSocketMessage);
+  }
+}
+
+async function loadToken(path: string): Promise<Buffer> {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const existing = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (existing) {
+    if (!existing.isFile() || existing.uid !== process.getuid?.() || (existing.mode & 0o077) !== 0) {
+      throw new Error("The Termux API token file must be a private file owned by this user.");
+    }
+    return readValidToken(path);
+  }
+
+  const token = randomBytes(32).toString("base64url");
+  try {
+    await writeFile(path, `${token}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    return readValidToken(path);
+  }
+  await chmod(path, 0o600);
+  return Buffer.from(token);
+}
+
+async function readValidToken(path: string): Promise<Buffer> {
+  const value = (await readFile(path, "utf8")).trim();
+  if (!/^[A-Za-z0-9_-]{43}$/u.test(value)) throw new Error("The Termux API token file has an invalid format.");
+  return Buffer.from(value);
+}
+
+async function listen(server: Server): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const onError = (error: NodeJS.ErrnoException) => {
+      if (error.code !== "EADDRINUSE") {
+        reject(error);
+        return;
+      }
+      server.removeListener("error", onError);
+      server.listen(0, HOST, onListening);
+    };
+    const onListening = () => {
+      server.removeListener("error", onError);
+      const address = server.address();
+      if (!address || typeof address === "string") reject(new Error("The Termux API did not bind a TCP port."));
+      else resolve(address.port);
+    };
+    server.once("error", onError);
+    server.listen(DEFAULT_PORT, HOST, onListening);
+  });
+}
+
+async function shutdown(state: ServerState, signal: NodeJS.Signals): Promise<void> {
+  if (state.stopping) return;
+  state.stopping = true;
+  logger.info(`Stopping the Termux API after ${signal}.`);
+  for (const response of state.eventClients) response.end();
+  state.eventClients.clear();
+  for (const client of state.webSocketClients) client.close(1001, "Server shutting down.");
+  state.webSocketClients.clear();
+  state.webSocketServer.close();
+  await new Promise<void>((resolve) => state.server.close(() => resolve()));
+  await Effect.runPromise(state.service.stop());
+  state.agents.database.close();
+}
+
+void main().catch((error: unknown) => {
+  logger.error("The Termux backend failed to start.", toLogValue(error));
+  process.exitCode = 1;
+});
