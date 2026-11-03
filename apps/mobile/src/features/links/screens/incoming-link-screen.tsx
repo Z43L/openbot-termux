@@ -61,7 +61,8 @@ function IncomingLinkContent({ request }: { request?: string }) {
   function close() {
     if (locked.current) return;
     forgetIncomingLink(request);
-    router.replace(session ? "/connected" : "/");
+    // The app guard sends a phone with no account and no local server on to sign-in.
+    router.replace("/connected");
   }
 
   async function pair() {

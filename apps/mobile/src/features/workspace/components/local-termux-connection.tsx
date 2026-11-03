@@ -1,10 +1,10 @@
+import { type AgentEvent, isAgentEvent } from "@openbot/contracts/ipc";
 import { useEffect } from "react";
-import { isAgentEvent, type AgentEvent } from "@openbot/contracts/ipc";
-import type { RemoteTeamTransportRef } from "./remote-team-transport";
+import { currentText } from "@/shared/lib/text";
 import type { LocalTermuxServerConfig } from "../model/local-termux-server";
 import { LocalTermuxTransport } from "../model/local-termux-transport";
+import type { RemoteTeamTransportRef } from "./remote-team-transport";
 import type { ServerConnectionHandle, ServerLoadContext } from "./server-connection";
-import { currentText } from "@/shared/lib/text";
 
 export function LocalTermuxConnection({
   config,
@@ -36,7 +36,7 @@ export function LocalTermuxConnection({
       const context = { stage: "connection" as const, isCurrent: () => !disposed && attempt === generation };
       onStatus(config.id, "connecting", null);
       try {
-        await client.connect(config.id, "");
+        await client.connect();
         if (context.isCurrent()) await load(config.id, "", client, context);
         if (context.isCurrent()) {
           onStatus(config.id, "online", null);
@@ -69,7 +69,7 @@ export function LocalTermuxConnection({
           socket.onopen = () => void connect();
           socket.onmessage = (message) => {
             try {
-              const event: unknown = JSON.parse(String(message.data));
+              const event = JSON.parse(String(message.data));
               if (isAgentEvent(event)) {
                 eventRetryMs = 1_000;
                 onTeamEvent(config.id, event);

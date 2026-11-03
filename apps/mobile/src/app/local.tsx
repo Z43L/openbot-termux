@@ -1,23 +1,24 @@
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
-import { isConversationMessage, type ConversationMessage } from "@openbot/contracts/ipc";
+import { type ConversationMessage, isConversationMessage } from "@openbot/contracts/ipc";
+import { isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
+import type { MobileTextKey } from "@openbot/i18n/mobile";
 import * as Crypto from "expo-crypto";
 import { router, Stack } from "expo-router";
 import { Button, Typography } from "heroui-native";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Keyboard, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { LocalTermuxTransport } from "@/features/workspace/model/local-termux-transport";
+import { decodeConversationPage } from "@/features/workspace/model/conversation";
 import {
+  type LocalTermuxServerConfig,
   normalizeLoopbackUrl,
   readLocalTermuxServers,
   saveLocalTermuxServer,
-  type LocalTermuxServerConfig,
 } from "@/features/workspace/model/local-termux-server";
-import { decodeConversationPage } from "@/features/workspace/model/conversation";
+import { LocalTermuxTransport } from "@/features/workspace/model/local-termux-transport";
 import { decodeAgentSummaries } from "@/features/workspace/model/workspace-records";
 import { SheetFormField } from "@/shared/components/sheet-form-field";
 import { SheetScrollView } from "@/shared/components/sheet-scroll-view";
-import type { MobileTextKey } from "@openbot/i18n/mobile";
 import { useText } from "@/shared/lib/text";
 
 interface LocalAgent {
@@ -51,63 +52,78 @@ export default function LocalTermuxScreen() {
   const [connected, setConnected] = useState(false);
   const busyRef = useRef(false);
 
-  const readAgents = useCallback(async (config: LocalTermuxServerConfig) => {
-    const response = await fetch(`${config.url}/api/agents`, {
-      headers: { authorization: `Bearer ${config.token}`, accept: "application/json" },
-    });
-    if (response.status === 401) throw new Error(t("mobile.server.local.authFailed"));
-    if (!response.ok) throw new Error(t("mobile.server.local.requestFailed", { status: response.status }));
-    const value: unknown = await response.json();
-    if (typeof value !== "object" || value === null || !Array.isArray((value as { agents?: unknown }).agents))
-      throw new Error(t("mobile.server.local.invalidResponse"));
-    setAgents(decodeAgentSummaries((value as { agents: unknown }).agents));
-  }, [t]);
+  const readAgents = useCallback(
+    async (config: LocalTermuxServerConfig) => {
+      const response = await fetch(`${config.url}/api/agents`, {
+        headers: { authorization: `Bearer ${config.token}`, accept: "application/json" },
+      });
+      if (response.status === 401) throw new Error(t("mobile.server.local.authFailed"));
+      if (!response.ok) throw new Error(t("mobile.server.local.requestFailed", { status: response.status }));
+      const value = await response.json();
+      if (!isDynamicRecord(value) || !Array.isArray(value.agents))
+        throw new Error(t("mobile.server.local.invalidResponse"));
+      setAgents(decodeAgentSummaries(value.agents));
+    },
+    [t],
+  );
 
-  const readConversation = useCallback(async (config: LocalTermuxServerConfig, id: string) => {
-    const response = await fetch(`${config.url}/api/agents/${encodeURIComponent(id)}/conversation-page?limit=100`, {
-      headers: { authorization: `Bearer ${config.token}`, accept: "application/json" },
-    });
-    if (response.status === 401) throw new Error(t("mobile.server.local.authFailed"));
-    if (!response.ok) throw new Error(t("mobile.server.local.requestFailed", { status: response.status }));
-    const page = decodeConversationPage(await response.json());
-    setMessages(page.messages.filter(isConversationMessage).map(({ id: messageId, author, text }) => ({
-      id: messageId,
-      author: t(AUTHOR_KEYS[author]),
-      text,
-    })));
-    return page;
-  }, [t]);
+  const readConversation = useCallback(
+    async (config: LocalTermuxServerConfig, id: string) => {
+      const response = await fetch(`${config.url}/api/agents/${encodeURIComponent(id)}/conversation-page?limit=100`, {
+        headers: { authorization: `Bearer ${config.token}`, accept: "application/json" },
+      });
+      if (response.status === 401) throw new Error(t("mobile.server.local.authFailed"));
+      if (!response.ok) throw new Error(t("mobile.server.local.requestFailed", { status: response.status }));
+      const page = decodeConversationPage(await response.json());
+      setMessages(
+        page.messages.filter(isConversationMessage).map(({ id: messageId, author, text }) => ({
+          id: messageId,
+          author: t(AUTHOR_KEYS[author]),
+          text,
+        })),
+      );
+      return page;
+    },
+    [t],
+  );
 
-  const connect = useCallback(async (config: LocalTermuxServerConfig) => {
-    const transport = new LocalTermuxTransport(config);
-    await transport.connect();
-    await readAgents(config);
-    setServer(config);
-    setConnected(true);
-    setError(null);
-    await saveLocalTermuxServer(config);
-    setServers(await readLocalTermuxServers());
-  }, [readAgents]);
+  const connect = useCallback(
+    async (config: LocalTermuxServerConfig) => {
+      const transport = new LocalTermuxTransport(config);
+      await transport.connect();
+      await readAgents(config);
+      setServer(config);
+      setConnected(true);
+      setError(null);
+      await saveLocalTermuxServer(config);
+      setServers(await readLocalTermuxServers());
+      // The saved server opens the main app. The app guard reads the new server from the store.
+      router.replace("/connected");
+    },
+    [readAgents],
+  );
 
   useEffect(() => {
     let active = true;
-    void readLocalTermuxServers().then(async (saved) => {
-      if (!active) return;
-      setServers(saved);
-      const first = saved[0];
-      if (first) {
-        setServerName(first.name);
-        setServerUrl(first.url);
-        await connect(first).catch((cause: unknown) => {
-          if (active) {
-            setServer(first);
-            setError(cause instanceof Error ? cause.message : t("mobile.server.local.unavailable"));
-          }
-        });
-      }
-    }).catch((cause: unknown) => {
-      if (active) setError(cause instanceof Error ? cause.message : t("mobile.server.local.savedSettingsInvalid"));
-    });
+    void readLocalTermuxServers()
+      .then(async (saved) => {
+        if (!active) return;
+        setServers(saved);
+        const first = saved[0];
+        if (first) {
+          setServerName(first.name);
+          setServerUrl(first.url);
+          await connect(first).catch((cause: unknown) => {
+            if (active) {
+              setServer(first);
+              setError(cause instanceof Error ? cause.message : t("mobile.server.local.unavailable"));
+            }
+          });
+        }
+      })
+      .catch((cause: unknown) => {
+        if (active) setError(cause instanceof Error ? cause.message : t("mobile.server.local.savedSettingsInvalid"));
+      });
     return () => {
       active = false;
     };
@@ -116,12 +132,13 @@ export default function LocalTermuxScreen() {
   useEffect(() => {
     if (!server || !agentId) return;
     let active = true;
-    const refresh = () => void readConversation(server, agentId).catch((cause: unknown) => {
-      if (active) {
-        setConnected(false);
-        setError(cause instanceof Error ? cause.message : t("mobile.server.local.unavailable"));
-      }
-    });
+    const refresh = () =>
+      void readConversation(server, agentId).catch((cause: unknown) => {
+        if (active) {
+          setConnected(false);
+          setError(cause instanceof Error ? cause.message : t("mobile.server.local.unavailable"));
+        }
+      });
     refresh();
     const timer = setInterval(refresh, 2_000);
     return () => {
@@ -200,10 +217,10 @@ export default function LocalTermuxScreen() {
       });
       if (response.status === 401) throw new Error(t("mobile.server.local.authFailed"));
       if (!response.ok) throw new Error(t("mobile.server.local.requestFailed", { status: response.status }));
-      const value: unknown = await response.json();
-      if (typeof value !== "object" || value === null || typeof (value as { agent?: LocalAgent }).agent?.id !== "string")
+      const value = await response.json();
+      if (!isDynamicRecord(value) || !isDynamicRecord(value.agent) || !isString(value.agent.id))
         throw new Error(t("mobile.server.local.invalidResponse"));
-      const created = (value as { agent: LocalAgent }).agent;
+      const created = { id: value.agent.id };
       setAgentName("");
       setPrompt("");
       await readAgents(server);
@@ -257,8 +274,21 @@ export default function LocalTermuxScreen() {
         </Typography.Paragraph>
         {error ? <Typography.Paragraph className="text-danger-text">{error}</Typography.Paragraph> : null}
         <SheetFormField label={t("mobile.server.local.name")} value={serverName} onChangeText={setServerName} />
-        <SheetFormField label={t("mobile.server.local.url")} value={serverUrl} onChangeText={setServerUrl} autoCapitalize="none" autoCorrect={false} />
-        <SheetFormField label={t("mobile.server.local.token")} value={token} onChangeText={setToken} secureTextEntry autoCapitalize="none" autoCorrect={false} />
+        <SheetFormField
+          label={t("mobile.server.local.url")}
+          value={serverUrl}
+          onChangeText={setServerUrl}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <SheetFormField
+          label={t("mobile.server.local.token")}
+          value={token}
+          onChangeText={setToken}
+          secureTextEntry
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
         <Button isDisabled={busy} onPress={() => void saveAndConnect()}>
           <Button.Label>{t("mobile.server.local.connect")}</Button.Label>
         </Button>
@@ -275,7 +305,12 @@ export default function LocalTermuxScreen() {
                     <Typography.Paragraph selectable>{item.text}</Typography.Paragraph>
                   </View>
                 ))}
-                <SheetFormField label={t("mobile.server.local.message")} value={message} onChangeText={setMessage} multiline />
+                <SheetFormField
+                  label={t("mobile.server.local.message")}
+                  value={message}
+                  onChangeText={setMessage}
+                  multiline
+                />
                 <Button isDisabled={busy || !message.trim()} onPress={() => void sendMessage()}>
                   <Button.Label>{t("mobile.server.local.send")}</Button.Label>
                 </Button>
@@ -289,13 +324,18 @@ export default function LocalTermuxScreen() {
                   </Button>
                 ))}
                 <Typography.Heading type="h4">{t("mobile.server.local.createAgent")}</Typography.Heading>
-        <SheetFormField
-          label={t("mobile.agent.form.name")}
-          value={agentName}
-          onChangeText={setAgentName}
-          maxLength={INPUT_LIMITS.agentName}
-        />
-                <SheetFormField label={t("mobile.server.local.firstMessage")} value={prompt} onChangeText={setPrompt} multiline />
+                <SheetFormField
+                  label={t("mobile.agent.form.name")}
+                  value={agentName}
+                  onChangeText={setAgentName}
+                  maxLength={INPUT_LIMITS.agentName}
+                />
+                <SheetFormField
+                  label={t("mobile.server.local.firstMessage")}
+                  value={prompt}
+                  onChangeText={setPrompt}
+                  multiline
+                />
                 <Button isDisabled={busy || !agentName.trim() || !prompt.trim()} onPress={() => void createAgent()}>
                   <Button.Label>{t("mobile.server.local.createAndRun")}</Button.Label>
                 </Button>

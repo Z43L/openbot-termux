@@ -590,7 +590,7 @@ function AuthenticatedSplit({ children }: PropsWithChildren) {
 
 export default function AuthenticatedLayout() {
   const { session } = useMobileSession();
-  const workspaceKey = session ? `${session.apiUrl}:${session.user.id}` : "signed-out";
+  const workspaceKey = session ? `${session.apiUrl}:${session.user.id}` : "local";
 
   return (
     <MobileWorkspaceProvider key={workspaceKey}>

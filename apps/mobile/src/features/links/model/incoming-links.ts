@@ -90,7 +90,8 @@ export function pendingSignInLinkId(): string | undefined {
 }
 
 export function redirectIncomingLink(path: string): string {
-  if (path === "openbot://" || path === "openbot:///" || path === "openbot:") return "/";
+  // The launcher opens the app on the root of its own scheme: `openbot://`, or `openbot-local-termux://`.
+  if (/^[a-z][a-z0-9+.-]*:(\/\/\/?)?$/iu.test(path)) return "/";
   // Expo Go and ordinary internal routes retain Expo Router's normal behavior.
   if (/^exps?:\/\//u.test(path)) return path;
   if (path.startsWith("/") && !path.startsWith("//")) {

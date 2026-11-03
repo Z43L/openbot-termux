@@ -1,18 +1,27 @@
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import WebSocket, { WebSocketServer } from "ws";
 import { chmod, lstat, mkdir, readFile, writeFile } from "node:fs/promises";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { type AgentEvent, type AgentSummary, isAgentModel, isAgentProvider, isAvatarHue, isAvatarSeed, isReasoningEffort } from "@openbot/contracts/ipc";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
+import {
+  type AgentEvent,
+  type AgentSummary,
+  isAgentModel,
+  isAgentProvider,
+  isAvatarHue,
+  isAvatarSeed,
+  isReasoningEffort,
+} from "@openbot/contracts/ipc";
+import { type DynamicRecord, isDynamicRecord } from "@openbot/contracts/runtime-values";
 import { createOpenBotLogger, toLogValue } from "@openbot/logging";
 import { Effect } from "effect";
-import { AgentStore } from "../backend/agent-store";
+import WebSocket, { WebSocketServer } from "ws";
 import { AgentService } from "../backend/agent-service";
+import { AgentStore } from "../backend/agent-store";
 import { MailboxStore } from "../backend/mailbox-store";
-import { isRecord } from "../backend/protocol";
 import { DisabledBrowserHost } from "./disabled-browser-host";
+import { handleTeamAgentRequest } from "./team-api";
 
 const logger = createOpenBotLogger("termux-server");
 const HOST = "127.0.0.1";
@@ -138,6 +147,16 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
     return;
   }
 
+  if (path === "/v1/agents" || path.startsWith("/v1/agents/")) {
+    await handleTeamAgentRequest(
+      request,
+      response,
+      new URL(request.url ?? "/", `http://${HOST}:${state.port}`),
+      state.service,
+    );
+    return;
+  }
+
   if (request.method === "GET" && path === "/api/agents") {
     writeJson(response, 200, { agents: state.service.listAgents() });
     return;
@@ -168,7 +187,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
   if (request.method === "GET" && path === "/api/events") {
     response.writeHead(200, {
       "cache-control": "no-store",
-      "connection": "keep-alive",
+      connection: "keep-alive",
       "content-type": "text/event-stream; charset=utf-8",
       "x-content-type-options": "nosniff",
     });
@@ -196,7 +215,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
       writeJson(response, 400, { error: "invalid_limit" });
       return;
     }
-    const page = await Effect.runPromise(state.service.readConversationPageFor(agentId, "termux-local-owner", undefined, limit));
+    const page = await Effect.runPromise(
+      state.service.readConversationPageFor(agentId, "termux-local-owner", undefined, limit),
+    );
     writeJson(response, 200, page);
     return;
   }
@@ -212,7 +233,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
       writeJson(response, 501, { error: "unsupported_message_options" });
       return;
     }
-    if (typeof message !== "string" || message.trim().length === 0 || message.length > INPUT_LIMITS.messageText) {
+    if (
+      !body ||
+      typeof message !== "string" ||
+      message.trim().length === 0 ||
+      message.length > INPUT_LIMITS.messageText
+    ) {
       writeJson(response, 400, { error: "invalid_message" });
       return;
     }
@@ -236,10 +262,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
   writeJson(response, 404, { error: "not_found" });
 }
 
-async function readJsonRecord(request: IncomingMessage): Promise<Record<string, unknown> | null> {
+async function readJsonRecord(request: IncomingMessage): Promise<DynamicRecord | null> {
   try {
-    const value: unknown = JSON.parse(await readBody(request));
-    return isRecord(value) ? value : null;
+    const value = JSON.parse(await readBody(request));
+    return isDynamicRecord(value) ? value : null;
   } catch {
     return null;
   }
@@ -276,7 +302,8 @@ async function readCreateInput(request: IncomingMessage): Promise<{
     (record.provider !== undefined && !isAgentProvider(record.provider)) ||
     (record.model !== undefined && !isAgentModel(record.model)) ||
     (record.reasoningEffort !== undefined && !isReasoningEffort(record.reasoningEffort))
-  ) return null;
+  )
+    return null;
   return {
     name: record.name,
     description: record.description,
@@ -311,7 +338,10 @@ function authorized(request: IncomingMessage, token: Buffer): boolean {
 function authorizedWebSocket(request: IncomingMessage, token: Buffer): boolean {
   const protocols = request.headers["sec-websocket-protocol"];
   if (typeof protocols !== "string") return false;
-  const credential = protocols.split(",").map((value) => value.trim()).find((value) => value.startsWith("bearer."));
+  const credential = protocols
+    .split(",")
+    .map((value) => value.trim())
+    .find((value) => value.startsWith("bearer."));
   if (!credential) return false;
   const supplied = Buffer.from(credential.slice("bearer.".length));
   return supplied.length === token.length && timingSafeEqual(supplied, token);
@@ -360,7 +390,7 @@ async function loadToken(path: string): Promise<Buffer> {
   try {
     await writeFile(path, `${token}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
     return readValidToken(path);
   }
   await chmod(path, 0o600);

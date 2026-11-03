@@ -116,10 +116,8 @@ import { setSyncedNotificationLevels } from "@/features/settings/model/notificat
 import { ShareExtensionSync } from "@/features/share/share-extension-sync";
 import { fetch } from "@/features/support/model/logged-fetch";
 import { supportLog } from "@/features/support/model/support-log";
-import type { RemoteTeamTransportRef } from "@/features/workspace/components/remote-team-transport";
 import { LocalTermuxConnection } from "@/features/workspace/components/local-termux-connection";
-import { deleteLocalTermuxServer, normalizeLoopbackUrl, readLocalTermuxServers, saveLocalTermuxServer, type LocalTermuxServerConfig } from "@/features/workspace/model/local-termux-server";
-import { LocalTermuxTransport } from "@/features/workspace/model/local-termux-transport";
+import type { RemoteTeamTransportRef } from "@/features/workspace/components/remote-team-transport";
 import {
   ServerConnection,
   type ServerConnectionHandle,
@@ -161,6 +159,15 @@ import { ConnectionWaits } from "@/features/workspace/model/connection-waits";
 import { conversationMessageId, decodeConversationPage } from "@/features/workspace/model/conversation";
 import { MobileConversationStore } from "@/features/workspace/model/conversation-store";
 import { LiveWorkspaceStore } from "@/features/workspace/model/live-workspace-store";
+import {
+  deleteLocalTermuxServer,
+  LOCAL_TERMUX_CAPABILITIES,
+  type LocalTermuxServerConfig,
+  normalizeLoopbackUrl,
+  readLocalTermuxServers,
+  saveLocalTermuxServer,
+} from "@/features/workspace/model/local-termux-server";
+import { LocalTermuxTransport } from "@/features/workspace/model/local-termux-transport";
 import {
   dropApproval,
   InactiveRequestError,
@@ -226,6 +233,15 @@ export type {
   MobileWorkspaceContextValue,
   MobileWorkspaceState,
 } from "@/features/workspace/model/workspace-types";
+
+/**
+ * The scope of a phone with a saved local server and no account session. The URL is never contacted:
+ * `.invalid` does not resolve, so an account request from this scope fails instead of reaching the API.
+ */
+const LOCAL_API_URL = "https://local.invalid";
+const LOCAL_USER_ID = "local";
+/** The directory client refuses an empty token. This one never reaches an account service. */
+const LOCAL_NO_TOKEN = "local-no-account";
 
 const NO_IDS: string[] = [];
 const NO_AGENTS: MobileAgent[] = [];
@@ -314,23 +330,21 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
   useEffect(() => () => queryClient.removeQueries({ queryKey: queryKeys.chatQueue() }), [queryClient]);
   const presenceSignatures = useRef(new Map<string, string>());
   const [memberCountByServer, setMemberCountByServer] = useState<Readonly<Record<string, number>>>({});
-  if (!session) throw new Error("MobileWorkspaceProvider requires a signed-in mobile session.");
-  const queryScope = useMemo<QueryScope>(
-    () => [session.apiUrl, session.user.id, sessionScope],
-    [session.apiUrl, session.user.id, sessionScope],
-  );
+  const apiUrl = session?.apiUrl ?? LOCAL_API_URL;
+  const userId = session?.user.id ?? LOCAL_USER_ID;
+  const queryScope = useMemo<QueryScope>(() => [apiUrl, userId, sessionScope], [apiUrl, userId, sessionScope]);
 
   const directory = useMemo(
     () =>
       new RemoteTeamDirectoryClient({
-        apiUrl: session.apiUrl,
-        token: session.sessionToken,
+        apiUrl,
+        token: session?.sessionToken ?? LOCAL_NO_TOKEN,
         fetch,
-        hostKeys: trustedHostKeys(session.apiUrl, session.user.id),
-        pairedHost: session.host,
+        hostKeys: trustedHostKeys(apiUrl, userId),
+        pairedHost: session?.host,
         verifyHostKeySignature: verifyEd25519Base64Url,
       }),
-    [session.apiUrl, session.sessionToken, session.user.id, session.host],
+    [apiUrl, session?.sessionToken, userId, session?.host],
   );
   const connections = useRef(new Map<string, ServerConnectionHandle>());
   const [connectionWaits] = useState(() => new ConnectionWaits());
@@ -342,11 +356,15 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
   const localTermuxServersRef = useRef(localTermuxServers);
   localTermuxServersRef.current = localTermuxServers;
   useEffect(() => {
-    void readLocalTermuxServers().then((items) => {
-      localTermuxServersRef.current = items;
-      setLocalTermuxServers(items);
-      setServers((current) => mergeLocalTermuxServers(current, items));
-    }).catch(() => undefined);
+    void readLocalTermuxServers()
+      .then((items) => {
+        localTermuxServersRef.current = items;
+        setLocalTermuxServers(items);
+        setServers((current) => mergeLocalTermuxServers(current, items));
+        // Without an account the directory is ready before this read ends and finds no server to select.
+        setActiveServerId((current) => current ?? items[0]?.id ?? null);
+      })
+      .catch(() => undefined);
   }, []);
   const [serverDirectoryState, setServerDirectoryState] = useState<MobileServerDirectoryState>("loading");
   const [serverDirectoryError, setServerDirectoryError] = useState<string | null>(null);
@@ -374,9 +392,9 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
   const readRefresh = useMemo(() => createRemoteReadRefresh(), []);
   const serverCapabilities = useRef(new Map<string, readonly string[]>());
   const { serverOrder, defaultServerId, orderedServers, sortByPreference, reorderServers } = useServerOrder(
-    session.apiUrl,
-    session.user.id,
-    session.host?.hostId,
+    apiUrl,
+    userId,
+    session?.host?.hostId,
     servers,
   );
   // The app opens on the first server of the list. The directory corrects a saved server that is gone.
@@ -393,8 +411,9 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
   );
   useEffect(() => () => conversationStore.dispose(), [conversationStore]);
   const workspaceCache = useMemo(
-    () => createWorkspaceCache(`${session.apiUrl}:${session.user.id}`),
-    [session.apiUrl, session.user.id],
+    // A phone without an account keeps no copy of the chats of its local server.
+    () => (session ? createWorkspaceCache(`${apiUrl}:${userId}`) : null),
+    [session, apiUrl, userId],
   );
   /** The last agent list of each server, as the host sent it, for the phone's cache. */
   const cachedSummaries = useRef(new Map<string, RemoteAgent[]>());
@@ -405,12 +424,12 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
   const [liveState] = useState(() => new LiveWorkspaceStore());
   const preferenceStore = useMemo(
     () =>
-      createWorkspacePreferences(session.apiUrl, session.user.id, {
+      createWorkspacePreferences(apiUrl, userId, {
         // The keychain that a locked phone can read (`locked-keychain.ts`), with the session.
         get: (key) => LockedKeychain.getItem(key),
         set: (key, value) => LockedKeychain.setItem(key, value),
       }),
-    [session.apiUrl, session.user.id],
+    [apiUrl, userId],
   );
   const [preferences, setPreferences] = useState<Record<string, RemoteWorkspacePreferences>>({});
   const preferencesRef = useRef(preferences);
@@ -517,7 +536,10 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
 
   const installHosts = useCallback(
     (hosts: RemoteTeamHost[]) => {
-      const available = new Set([...hosts.map((host) => host.hostId), ...localTermuxServersRef.current.map((item) => item.id)]);
+      const available = new Set([
+        ...hosts.map((host) => host.hostId),
+        ...localTermuxServersRef.current.map((item) => item.id),
+      ]);
       dropServerState(new Set(serversRef.current.filter((server) => !available.has(server.id)).map(({ id }) => id)));
       // Also the copies of servers that the account left while the app was closed.
       void workspaceCache?.retain([...available]).catch(() => undefined);
@@ -525,17 +547,21 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
       setServers((current) => {
         const previousServers = new Map(current.map((server) => [server.id, server]));
         const remote = hosts.map((host) =>
-          serverFromHost(host, serverKind(host.hostId, session.host?.hostId), previousServers.get(host.hostId)),
+          serverFromHost(host, serverKind(host.hostId, session?.host?.hostId), previousServers.get(host.hostId)),
         );
         return mergeLocalTermuxServers(remote, localTermuxServersRef.current, previousServers);
       });
       setActiveServerId((current) =>
-        hosts.some((host) => host.hostId === current) || localTermuxServersRef.current.some((item) => item.id === current)
+        hosts.some((host) => host.hostId === current) ||
+        localTermuxServersRef.current.some((item) => item.id === current)
           ? current
-          : (sortByPreference([...hosts.map((host) => ({ id: host.hostId })), ...localTermuxServersRef.current.map((item) => ({ id: item.id }))])[0]?.id ?? null),
+          : (sortByPreference([
+              ...hosts.map((host) => ({ id: host.hostId })),
+              ...localTermuxServersRef.current.map((item) => ({ id: item.id })),
+            ])[0]?.id ?? null),
       );
     },
-    [dropServerState, session.host?.hostId, sortByPreference, workspaceCache],
+    [dropServerState, session?.host?.hostId, sortByPreference, workspaceCache],
   );
 
   const directoryRefresh = useMemo(
@@ -545,6 +571,12 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
           const generation = ++directoryGeneration.current;
           setServerDirectoryState("loading");
           setServerDirectoryError(null);
+          // Without an account there is no host directory; the local servers are the only servers.
+          if (!session) {
+            installHosts([]);
+            setServerDirectoryState("ready");
+            return;
+          }
           const hosts = yield* directory.listHosts().pipe(
             Effect.tapError((error) =>
               Effect.sync(() => {
@@ -562,7 +594,7 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
           setServerDirectoryState("ready");
         }),
       ),
-    [directory, installHosts],
+    [directory, installHosts, session],
   );
   const refreshHosts = useCallback(() => runTeamEffect(directoryRefresh.refresh(true)), [directoryRefresh]);
   const refreshMemberships = useCallback(() => {
@@ -935,9 +967,10 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
       if (!context.isCurrent()) return;
       if (serversRef.current.find((server) => server.id === serverId)?.kind === "termux") {
         context.stage = "agents";
-        serverCapabilities.current.set(serverId, []);
-        channelStore.configure(serverId, []);
-        const reads = startWorkspaceReads(client, []);
+        const capabilities = [...LOCAL_TERMUX_CAPABILITIES];
+        serverCapabilities.current.set(serverId, capabilities);
+        channelStore.configure(serverId, capabilities);
+        const reads = startWorkspaceReads(client, capabilities);
         const summaries = await reads.agents;
         if (!context.isCurrent()) return;
         replaceServerAgents(serverId, summaries);
@@ -1098,11 +1131,14 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
   }, []);
   const handleLocalStatus = useCallback(
     (id: string, state: "connecting" | "online" | "offline" | "error", message: string | null) => {
-      setServers((current) => current.map((server) => server.id === id
-        ? { ...server, state, initialConnectionPending: false, connectionMessage: message }
-        : server));
+      setServers((current) =>
+        current.map((server) =>
+          server.id === id ? { ...server, state, initialConnectionPending: false, connectionMessage: message } : server,
+        ),
+      );
       if (state === "online") connectionWaits.settle(id, null);
-      else if (state === "offline" || state === "error") connectionWaits.settle(id, new Error(message ?? "Local server is offline."));
+      else if (state === "offline" || state === "error")
+        connectionWaits.settle(id, new Error(message ?? "Local server is offline."));
     },
     [connectionWaits],
   );
@@ -1110,14 +1146,14 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
     () =>
       createHostedServerWake((hostId) =>
         Effect.tryPromise((signal) =>
-          fetch(new URL(`/v2/hosting/servers/${encodeURIComponent(hostId)}/wake`, session.apiUrl).toString(), {
+          fetch(new URL(`/v2/hosting/servers/${encodeURIComponent(hostId)}/wake`, apiUrl).toString(), {
             method: "POST",
-            headers: { Authorization: `Bearer ${session.sessionToken}` },
+            headers: { Authorization: `Bearer ${session?.sessionToken ?? ""}` },
             signal,
           }),
         ),
       ),
-    [session.apiUrl, session.sessionToken],
+    [apiUrl, session?.sessionToken],
   );
   const foregroundRef = useRef(foreground);
   foregroundRef.current = foreground;
@@ -2160,38 +2196,44 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
       <RecoveryCountdownContext.Provider value={recoveryCountdowns}>
         <View className="flex-1">
           {children}
-          <QuickActionsSync
-            apiUrl={session.apiUrl}
-            userId={session.user.id}
-            servers={servers}
-            serversReady={serverDirectoryState === "ready"}
-            activeServerId={activeServerId}
-            agents={agents}
-            preferences={visiblePreferences}
-          />
-          <ShareExtensionSync
-            apiUrl={session.apiUrl}
-            userId={session.user.id}
-            sessionToken={session.sessionToken}
-            servers={orderedServers}
-            serversReady={serverDirectoryState === "ready"}
-            agents={agents}
-          />
+          {session ? (
+            <>
+              <QuickActionsSync
+                apiUrl={session.apiUrl}
+                userId={session.user.id}
+                servers={servers}
+                serversReady={serverDirectoryState === "ready"}
+                activeServerId={activeServerId}
+                agents={agents}
+                preferences={visiblePreferences}
+              />
+              <ShareExtensionSync
+                apiUrl={session.apiUrl}
+                userId={session.user.id}
+                sessionToken={session.sessionToken}
+                servers={orderedServers}
+                serversReady={serverDirectoryState === "ready"}
+                agents={agents}
+              />
+            </>
+          ) : null}
           <NotificationAvatarSync servers={servers} serversReady={serverDirectoryState === "ready"} agents={agents} />
-          {servers.filter((server) => server.kind !== "termux").map((server) => (
-            <ServerConnection
-              key={server.id}
-              hostId={server.id}
-              publicKey={server.publicKey}
-              active={foreground && (!othersHeld || server.id === activeServerId)}
-              directory={directory}
-              register={registerConnection}
-              load={loadServer}
-              onStatus={handleConnectionStatus}
-              onMembershipChanged={refreshMemberships}
-              onTeamEvent={handleTeamEvent}
-            />
-          ))}
+          {servers
+            .filter((server) => server.kind !== "termux")
+            .map((server) => (
+              <ServerConnection
+                key={server.id}
+                hostId={server.id}
+                publicKey={server.publicKey}
+                active={foreground && (!othersHeld || server.id === activeServerId)}
+                directory={directory}
+                register={registerConnection}
+                load={loadServer}
+                onStatus={handleConnectionStatus}
+                onMembershipChanged={refreshMemberships}
+                onTeamEvent={handleTeamEvent}
+              />
+            ))}
           {localTermuxServers.map((config) => (
             <LocalTermuxConnection
               key={config.id}

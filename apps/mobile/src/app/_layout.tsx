@@ -1,7 +1,7 @@
 import "../../global.css";
 
 import { QueryClientProvider } from "@tanstack/react-query";
-import { router, useGlobalSearchParams, usePathname } from "expo-router";
+import { useGlobalSearchParams, usePathname } from "expo-router";
 import { DarkTheme, DefaultTheme, ThemeProvider } from "expo-router/react-navigation";
 import { Stack } from "expo-router/stack";
 import { StatusBar } from "expo-status-bar";
@@ -20,7 +20,6 @@ import { installAppLock } from "@/features/app-lock/model/app-lock";
 import { DevelopmentConnectLinkHandler } from "@/features/auth/components/development-connect-link-handler";
 import { MobileSessionProvider, useMobileSession } from "@/features/auth/context/mobile-session-context";
 import { loadOnboardingProgress } from "@/features/onboarding/model/onboarding-progress";
-import { readLocalTermuxServers } from "@/features/workspace/model/local-termux-server";
 import { resetNotificationAvatars } from "@/features/push-notifications/notification-avatars";
 import { installNotificationHandler } from "@/features/push-notifications/use-notification-taps";
 import { installQuickActions, resetQuickActions } from "@/features/quick-actions/quick-actions-native";
@@ -38,6 +37,7 @@ import { installSupportLog } from "@/features/support/model/support-log-capture"
 import { parakeetModel } from "@/features/voice/model/parakeet-model";
 import { supertonicModel } from "@/features/voice/model/supertonic-model";
 import { loadVoiceSettings } from "@/features/voice/model/voice-settings";
+import { readLocalTermuxServers, subscribeLocalTermuxServers } from "@/features/workspace/model/local-termux-server";
 import { AppLoadingOverlayProvider, useAppLoadingOverlay } from "@/shared/components/app-loading-overlay";
 import { BloubStage } from "@/shared/components/bloub-stage/bloub-stage";
 import { BloubStageProvider, useBloubStageRequest } from "@/shared/components/bloub-stage/bloub-stage-context";
@@ -79,7 +79,8 @@ function RootNavigator() {
   // Motion choices are read before the first screen, so no screen starts an animation that Settings turned off.
   const motionReady = useMotionPreferences((state) => state.ready);
   const preferencesReady = appearanceReady && motionReady;
-  const busy = loading || !preferencesReady;
+  const [localChecked, setLocalChecked] = useState(false);
+  const busy = loading || !preferencesReady || !localChecked;
   const { covered, nativeHidden, reportArtwork, reportContentReady } = useSplashGate(
     busy,
     nativeSplash,
@@ -92,31 +93,37 @@ function RootNavigator() {
 
   useEffect(() => {
     let active = true;
-    void readLocalTermuxServers()
-      .then((servers) => {
-        if (active) setHasSavedLocalServer(servers.length > 0);
-      })
-      .catch(() => {
-        if (active) setHasSavedLocalServer(false);
-      });
+    const read = () =>
+      void readLocalTermuxServers()
+        .then((servers) => {
+          if (active) setHasSavedLocalServer(servers.length > 0);
+        })
+        .catch(() => {
+          if (active) setHasSavedLocalServer(false);
+        })
+        .finally(() => {
+          if (active) setLocalChecked(true);
+        });
+    read();
+    // The change arrives with its answer, so the guard opens before the screen that saved it navigates.
+    const stop = subscribeLocalTermuxServers((hasServers) => {
+      if (active) setHasSavedLocalServer(hasServers);
+    });
     return () => {
       active = false;
+      stop();
     };
   }, []);
 
+  // A phone with a saved local server and no account opens the main app on that server. Choosing the
+  // account (`mode=cloud`) shows sign-in, and so does a phone that signed out of an account.
+  const localOnly = !session && !hadCloudSession.current && mode !== "cloud" && hasSavedLocalServer;
+
+  // `onLayout` of the content view does not fire again when only its handler changes. A phone with a
+  // local server moves from `/` to `/connected` after the first layout, so this reports it too.
   useEffect(() => {
-    if (
-      !loading &&
-      preferencesReady &&
-      !session &&
-      !hadCloudSession.current &&
-      mode !== "cloud" &&
-      hasSavedLocalServer &&
-      (pathname === "/" || pathname === "/index")
-    ) {
-      router.replace("/local");
-    }
-  }, [hasSavedLocalServer, loading, mode, pathname, preferencesReady, session]);
+    if (!busy && (session || pathname !== "/")) reportContentReady();
+  }, [busy, pathname, session, reportContentReady]);
 
   // The stage takes over from the native splash with the same block and eyes. When the launch is
   // slow, the eyes start to think and the status shows under them.
@@ -167,7 +174,7 @@ function RootNavigator() {
           accessibilityElementsHidden={blocked}
           importantForAccessibility={blocked ? "no-hide-descendants" : "auto"}
         >
-          {!loading && preferencesReady ? (
+          {!busy ? (
             <View className="flex-1" onLayout={session || pathname !== "/" ? reportContentReady : undefined}>
               <Stack
                 screenOptions={{
@@ -179,7 +186,7 @@ function RootNavigator() {
               >
                 {/* A blocked route redirects. Without `redirectTo`, Expo Router uses the first open route, the
                     `(app)` group, whose URL is `/`, and `/` is the blocked sign-in screen. */}
-                <Stack.Protected guard={!session} redirectTo="/connected">
+                <Stack.Protected guard={!session && !localOnly} redirectTo="/connected">
                   {/* Signing out goes back, so it fades like signing in instead of sliding forward. */}
                   <Stack.Screen
                     name="index"
@@ -193,7 +200,7 @@ function RootNavigator() {
                     }}
                   />
                 </Stack.Protected>
-                <Stack.Protected guard={Boolean(session)} redirectTo="/">
+                <Stack.Protected guard={Boolean(session) || localOnly} redirectTo="/">
                   <Stack.Screen
                     name="(app)"
                     options={{
