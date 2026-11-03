@@ -35,6 +35,7 @@ interface ServerState {
   agents: AgentStore;
   service: AgentService;
   workflows: TermuxWorkflows;
+  mailbox: MailboxStore;
   server: Server;
   token: Buffer;
   port: number;
@@ -76,6 +77,7 @@ async function main(): Promise<void> {
     agents,
     service,
     workflows,
+    mailbox,
     server,
     token,
     port: DEFAULT_PORT,
@@ -158,6 +160,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
       new URL(request.url ?? "/", `http://${HOST}:${state.port}`),
       state.service,
       state.workflows,
+      state.mailbox,
     );
     return;
   }

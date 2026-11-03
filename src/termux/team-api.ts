@@ -9,6 +9,7 @@ import { createOpenBotLogger, toLogValue } from "@openbot/logging";
 import { Effect } from "effect";
 import { AgentDuplicationFailed } from "../backend/agent/duplication-gate";
 import type { AgentService } from "../backend/agent-service";
+import type { MailboxStore } from "../backend/mailbox-store";
 import { StoredStateFailure } from "../backend/stored-state-effects";
 import type { TeamApiSidebarLayout, TeamApiWorkflows } from "../main/team-api/dependencies";
 import { HttpError } from "../main/team-api/http-error";
@@ -23,6 +24,7 @@ import {
 } from "../main/team-api/route-agent-threads";
 import { routeAgents } from "../main/team-api/route-agents";
 import { routeChannels } from "../main/team-api/route-channels";
+import { routeFiles } from "../main/team-api/route-files";
 import { routeWorkflows } from "../main/team-api/route-workflows";
 
 const logger = createOpenBotLogger("termux-team-api");
@@ -77,6 +79,7 @@ export async function handleTeamRequest(
   url: URL,
   agents: AgentService,
   workflows: TeamApiWorkflows,
+  mailbox: MailboxStore,
 ): Promise<void> {
   const method = request.method ?? "GET";
   // The phone names its protocol and capabilities in headers, as a remote server's client does.
@@ -115,7 +118,7 @@ export async function handleTeamRequest(
     },
   };
   try {
-    const outcome = await route(context, agents, workflows);
+    const outcome = await route(context, agents, workflows, mailbox);
     if (outcome === "unmatched")
       writeBody(response, 404, JSON.stringify({ error: sourceText("error.team.routeNotFound") }));
   } catch (error) {
@@ -137,6 +140,7 @@ async function route(
   context: TeamApiRequestContext,
   agents: AgentService,
   workflows: TeamApiWorkflows,
+  mailbox: MailboxStore,
 ): Promise<"handled" | "unmatched"> {
   if (isChannelRoute(context.url.pathname)) return routeChannels(context, agents.channels, agents);
   for (const module of [
@@ -146,6 +150,7 @@ async function route(
     () => routeAgentThreadFiles(context, agents, NO_HIDDEN_AGENTS),
     () => routeAgentThreadBranches(context, agents, NO_HIDDEN_AGENTS),
     () => routeWorkflows(context, workflows, agents, NO_HIDDEN_AGENTS),
+    () => routeFiles(context, { agents, mailbox }),
   ]) {
     if ((await module()) === "handled") return "handled";
   }

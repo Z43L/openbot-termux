@@ -43,7 +43,7 @@ import {
   presentChatMessages,
 } from "@/features/chat/model/chat-messages";
 import { finishedTurnSummaries, type TurnStepsSummary } from "@/features/chat/model/turn-thinking";
-import { replyVoiceReady } from "@/features/voice/model/reply-voice";
+import { replyVoiceReady, useReplyVoiceReady } from "@/features/voice/model/reply-voice";
 import { ConnectionStatus } from "@/features/workspace/components/connection-status";
 import { useTurnStepLines } from "@/features/workspace/components/use-agent-activity";
 import { useBrowserRequests } from "@/features/workspace/components/use-live-workspace";
@@ -603,10 +603,11 @@ export function ChatView({
   const showBrowserRequests = serverOnline && foregroundVisit && isFocused && !readOnly;
   // The mic of the composer: a live conversation in an agent chat, as on desktop. A channel has no
   // one conversation to follow, so its mic dictates a message for review.
-  // With no voice ready, the mic opens Settings > Voice, where the user downloads Supertonic 3 or adds
-  // an ElevenLabs key.
+  // With no reply voice ready, the mic dictates a message with the phone's recognizer. Settings > Voice
+  // is where the user downloads Supertonic 3 or adds an ElevenLabs key to start live conversations.
+  const replyReady = useReplyVoiceReady();
   const composerVoice: ComposerVoice =
-    live.available || live.open
+    live.open || (live.available && replyReady)
       ? {
           ...liveVoice(live, voiceAgent?.name ?? target.name, t),
           start: () => (replyVoiceReady() ? live.start() : router.push("/settings/voice")),

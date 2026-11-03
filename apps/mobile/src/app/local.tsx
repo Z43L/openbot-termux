@@ -41,7 +41,7 @@ export default function LocalTermuxScreen() {
   const [agents, setAgents] = useState<LocalAgent[]>([]);
   const [agentId, setAgentId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Array<{ id: string; author: string; text: string }>>([]);
-  const [serverName, setServerName] = useState("Samsung Local");
+  const [serverName, setServerName] = useState(() => t("mobile.server.local.localMode"));
   const [serverUrl, setServerUrl] = useState("http://127.0.0.1:8787");
   const [token, setToken] = useState("");
   const [agentName, setAgentName] = useState("");

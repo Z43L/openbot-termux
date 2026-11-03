@@ -62,6 +62,17 @@ export function replyVoiceReady(engine = useVoiceSettings.getState().engine): bo
   return useSupertonicModel.getState().phase === "ready";
 }
 
+/** `replyVoiceReady` for a component: it renders again when the voice becomes ready or stops being ready. */
+export function useReplyVoiceReady(): boolean {
+  const engine = useVoiceSettings((state) => state.engine);
+  const hasKey = useVoiceSettings((state) => state.hasElevenLabsKey);
+  const elevenLabsVoice = useVoiceSettings((state) => state.elevenLabsVoice);
+  const supertonicPhase = useSupertonicModel((state) => state.phase);
+  if (!speechNative) return false;
+  if (engine === "elevenlabs") return hasKey && elevenLabsVoice !== null;
+  return supertonicPhase === "ready";
+}
+
 /** The language a reply falls back to when its words do not show one: the dictation language, else the phone's. */
 function fallbackLanguage(): SpeechLanguage {
   const chosen = useDictationLanguage.getState().value;

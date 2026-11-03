@@ -1,6 +1,6 @@
 import { isDynamicRecord } from "@openbot/contracts/runtime-values";
 import { TEAM_AGENT_CREATE_MODEL_CAPABILITY } from "@openbot/contracts/team-protocol/current";
-import { teamHttpCodec } from "@openbot/contracts/team-protocol/http-codecs";
+import { type TeamHttpCodec, teamHttpCodec } from "@openbot/contracts/team-protocol/http-codecs";
 import { teamSideRouteCodec } from "@openbot/contracts/team-protocol/side-routes";
 import { TEAM_CAPABILITIES_HEADER, TEAM_PROTOCOL_VERSION_HEADER } from "@openbot/contracts/team-protocol/v1";
 import type { TeamProtocolV2Json } from "@openbot/contracts/team-protocol/v2";
@@ -43,8 +43,11 @@ export class LocalTermuxTransport implements RemoteTeamTransportRef {
   ): Promise<T> {
     const t = currentText().t;
     if (!this.#connected) throw new Error(t("mobile.server.local.disconnected"));
-    if (upload) throw new Error(t("mobile.server.local.attachmentsUnsupported"));
     if (!isServedRoute(path)) throw new Error(t("mobile.server.local.unsupported"));
+    // The server sends a file as it is. The app reads it as `{ name, mimeType, base64 }`, as the remote
+    // client builds it, and it sends a file from base64 the same way.
+    if (upload) return decode(await this.#upload(method, path, upload));
+    if (method === "GET" && isFileDownload(path)) return decode(await this.#download(path));
     // The Termux server answers the agent and channel routes of the Team API itself, in protocol 9 like a
     // remote server. Channel routes have their own codec, which the remote client also uses.
     const codec = teamHttpCodec(TEAM_PROTOCOL_V9);
@@ -58,11 +61,7 @@ export class LocalTermuxTransport implements RemoteTeamTransportRef {
           : codec.encodeRequest(method, path, body, options);
     const response = await this.#fetch(path, true, method, encoded);
     const payload = await response.json().catch(() => null);
-    if (!response.ok) {
-      if (response.status === 401) throw new Error(t("mobile.server.local.authFailed"));
-      if (response.status === 501) throw new Error(t("mobile.server.local.unsupported"));
-      throw new Error(t("mobile.server.local.requestFailed", { status: response.status }));
-    }
+    this.#requireOk(response);
     return decode(
       sideRoute
         ? sideRoute.response(path, response.status, payload, {
@@ -78,20 +77,92 @@ export class LocalTermuxTransport implements RemoteTeamTransportRef {
     return null;
   }
 
-  async #fetch(path: string, auth = true, method = "GET", body?: string | TeamProtocolV2Json): Promise<Response> {
+  #requireOk(response: Response): void {
+    if (response.ok) return;
+    const t = currentText().t;
+    if (response.status === 401) throw new Error(t("mobile.server.local.authFailed"));
+    if (response.status === 501) throw new Error(t("mobile.server.local.unsupported"));
+    throw new Error(t("mobile.server.local.requestFailed", { status: response.status }));
+  }
+
+  async #download(path: string): Promise<{ name: string; mimeType: string; base64: string }> {
+    const response = await this.#fetch(path);
+    this.#requireOk(response);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    return {
+      name: fileNameOf(response.headers.get("content-disposition")),
+      mimeType: response.headers.get("content-type") ?? "application/octet-stream",
+      base64: bytesToBase64(bytes),
+    };
+  }
+
+  async #upload(
+    method: string,
+    path: string,
+    upload: RemoteFileUpload,
+  ): Promise<ReturnType<TeamHttpCodec["decodeResponse"]>> {
+    const response = await this.#fetch(path, true, method, undefined, base64ToBytes(upload.base64));
+    const payload = await response.json().catch(() => null);
+    this.#requireOk(response);
+    return teamHttpCodec(TEAM_PROTOCOL_V9).decodeResponse(method, path, response.status, payload);
+  }
+
+  async #fetch(
+    path: string,
+    auth = true,
+    method = "GET",
+    body?: string | TeamProtocolV2Json,
+    bytes?: Uint8Array<ArrayBuffer>,
+  ): Promise<Response> {
     const headers = new Headers({ accept: "application/json" });
     if (auth) headers.set("authorization", `Bearer ${this.#config.token}`);
     if (path.startsWith("/v1/")) {
       headers.set(TEAM_PROTOCOL_VERSION_HEADER, String(TEAM_PROTOCOL_V9));
       headers.set(TEAM_CAPABILITIES_HEADER, LOCAL_TERMUX_CAPABILITIES.join(","));
     }
-    if (body !== undefined) headers.set("content-type", "application/json");
+    if (bytes !== undefined) headers.set("content-type", "application/octet-stream");
+    else if (body !== undefined) headers.set("content-type", "application/json");
     return fetch(new URL(path, `${this.#config.url}/`), {
       method,
       headers,
-      ...(body === undefined ? {} : { body: typeof body === "string" ? body : JSON.stringify(body) }),
+      ...(bytes !== undefined
+        ? { body: bytes }
+        : body === undefined
+          ? {}
+          : { body: typeof body === "string" ? body : JSON.stringify(body) }),
     });
   }
+}
+
+/** The routes that answer with a file as it is: a message attachment, a shared file and a workspace file. */
+function isFileDownload(path: string): boolean {
+  const base = path.split("?", 1)[0] ?? path;
+  return /^\/v1\/attachments\/[^/]+$/u.test(base) || base === "/v1/shared-files" || base === "/v1/workspace-files";
+}
+
+/** The file name of a `Content-Disposition: attachment; filename*=UTF-8''...` header. */
+function fileNameOf(disposition: string | null): string {
+  const encoded = /filename\*=UTF-8''([^;]+)/iu.exec(disposition ?? "")?.[1];
+  if (!encoded) return "file";
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    return encoded;
+  }
+}
+
+const BASE64_CHUNK = 0x8000;
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += BASE64_CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + BASE64_CHUNK));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
+  return Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
 }
 
 /** The server answers the Team API routes that its services can serve, and refuses the rest with a 404. */

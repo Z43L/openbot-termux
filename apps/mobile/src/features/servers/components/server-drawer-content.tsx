@@ -135,7 +135,7 @@ export const ServerDrawerContent = memo(function ServerDrawerContent({
   // The iOS menu host sizes to its content, so a row in a menu gets the slot width explicitly.
   const [rowWidth, setRowWidth] = useState<number>();
   const activeServer = servers.find((server) => server.id === activeServerId);
-  const displayName = session ? mobileUserName(session.user) : (activeServer?.name ?? "");
+  const displayName = session ? mobileUserName(session.user) : "";
   const avatarUrl = session?.user.avatarUrl ? new URL(session.user.avatarUrl, session.apiUrl).toString() : null;
   const serverIds = servers.map((server) => server.id);
   const canReorder = serverIds.length > 1;
@@ -493,17 +493,26 @@ export const ServerDrawerContent = memo(function ServerDrawerContent({
       </View>
 
       <View className="mr-3 flex-row items-center gap-2 pt-2">
-        <View className="min-h-14 min-w-0 flex-1 flex-row items-center gap-2.5 rounded-2xl px-2 py-2">
-          <ProfileAvatar neutral name={displayName} imageUrl={avatarUrl} size={36} />
-          <View className="min-w-0 flex-1">
-            <Typography.Paragraph className="font-semibold" numberOfLines={1} style={typeScale.preview}>
-              {displayName}
-            </Typography.Paragraph>
-            <Typography.Paragraph className="text-text-secondary" numberOfLines={1} selectable style={typeScale.small}>
-              {session ? session.user.email : activeServer?.address}
-            </Typography.Paragraph>
+        {session ? (
+          <View className="min-h-14 min-w-0 flex-1 flex-row items-center gap-2.5 rounded-2xl px-2 py-2">
+            <ProfileAvatar neutral name={displayName} imageUrl={avatarUrl} size={36} />
+            <View className="min-w-0 flex-1">
+              <Typography.Paragraph className="font-semibold" numberOfLines={1} style={typeScale.preview}>
+                {displayName}
+              </Typography.Paragraph>
+              <Typography.Paragraph
+                className="text-text-secondary"
+                numberOfLines={1}
+                selectable
+                style={typeScale.small}
+              >
+                {session.user.email}
+              </Typography.Paragraph>
+            </View>
           </View>
-        </View>
+        ) : (
+          <View className="min-h-14 flex-1" />
+        )}
         <ServerDrawerIconButton
           accessibilityLabel={t("mobile.server.drawer.settings")}
           color={mutedColor}

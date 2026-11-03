@@ -91,12 +91,16 @@ async function readSavedServers(): Promise<SavedLocalServer[]> {
   return saved ? decodeSavedServers(JSON.parse(saved)) : [];
 }
 
+/** The name that earlier builds filled in for a new local server. It shows as the generic name instead. */
+const LEGACY_DEFAULT_NAME = "Samsung Local";
+
 export async function readLocalTermuxServers(): Promise<LocalTermuxServerConfig[]> {
   return Promise.all(
     (await readSavedServers()).map(async (item) => {
       const token = await SecureStore.getItemAsync(`${TOKEN_PREFIX}${item.id}`);
       if (!token) throw new Error(currentText().t("mobile.server.local.savedTokenMissing"));
-      return { id: item.id, name: item.name, url: normalizeLoopbackUrl(item.url), token };
+      const name = item.name === LEGACY_DEFAULT_NAME ? currentText().t("mobile.server.local.localMode") : item.name;
+      return { id: item.id, name, url: normalizeLoopbackUrl(item.url), token };
     }),
   );
 }

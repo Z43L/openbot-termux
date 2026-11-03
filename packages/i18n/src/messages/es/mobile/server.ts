@@ -17,7 +17,6 @@ export const messages = {
   "mobile.server.local.unavailable": "El servidor local no está disponible.",
   "mobile.server.local.unhealthy": "El backend del servidor local no está listo.",
   "mobile.server.local.disconnected": "El servidor local está desconectado.",
-  "mobile.server.local.attachmentsUnsupported": "El servidor local aún no admite archivos adjuntos.",
   "mobile.server.local.authFailed": "El servidor local rechazó el token Bearer.",
   "mobile.server.local.unsupported": "El servidor local aún no admite esta función.",
   "mobile.server.local.requestFailed": "Falló la solicitud al servidor local ({status}).",

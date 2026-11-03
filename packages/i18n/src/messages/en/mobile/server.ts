@@ -16,7 +16,6 @@ export const messages = defineMessages("mobile.server", {
   "mobile.server.local.unavailable": "The local server is unavailable.",
   "mobile.server.local.unhealthy": "The local server backend is not ready.",
   "mobile.server.local.disconnected": "The local server is disconnected.",
-  "mobile.server.local.attachmentsUnsupported": "Local server file attachments are not supported yet.",
   "mobile.server.local.authFailed": "The local server rejected the bearer token.",
   "mobile.server.local.unsupported": "This feature is not supported by the local server yet.",
   "mobile.server.local.requestFailed": "The local server request failed ({status}).",

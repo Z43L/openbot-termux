@@ -5,3 +5,9 @@
 ### Added
 
 - OpenBot Local shows Threads and Workflows in the side menu. You can start a thread with an agent and make and run workflows on the local server.
+
+### Fixed
+
+- The microphone of a chat dictates a message when no reply voice is ready. It opened Settings > Voice before.
+- A local server shows as "OpenBot Local" in the app. The name "Samsung Local" is gone.
+- A file attached to a chat message opens from a local server, and a file can be attached.
