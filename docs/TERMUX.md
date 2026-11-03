@@ -85,6 +85,14 @@ Manage it with `openbot-termux start`, `stop`, `restart`, `status`, and `logs`. 
 keeps 10 files of up to 1 MB each under `~/.openbot-termux/log`. Failed service exits wait 60 seconds
 before a retry. The service runs under the Termux user; no root, systemd, PRoot, or Docker is used.
 
+To replace an installed server with the current version, run `sh scripts/termux/update`. It stops the
+service, runs `git pull --ff-only`, installs dependencies when `package.json` or `bun.lock` changed,
+removes the old runit service and the `openbot-termux` command that the installer made, installs
+them again, and starts the service. It keeps `~/.local/share/openbot-termux`, so the database and the
+token stay. It refuses a service path that this installer did not make. Use `--no-pull` to skip the
+download and `--boot` to also write the Termux:Boot hook. The first time, run `git pull` by hand,
+because an old checkout does not have the script yet.
+
 For optional boot after Android restarts, run `sh scripts/termux/install --boot`. Install and open
 the separate Termux:Boot app once. Its hook loads the official `termux-services` startup script.
 Android can still stop background processes. Battery optimization changes and wake locks are not

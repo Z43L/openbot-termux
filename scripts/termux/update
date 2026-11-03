@@ -1,0 +1,78 @@
+#!/data/data/com.termux/files/usr/bin/sh
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+prefix=${PREFIX:-/data/data/com.termux/files/usr}
+service_dir="$prefix/var/service/openbot"
+bin_dir="$prefix/bin"
+data_dir=${OPENBOT_TERMUX_DATA_DIR:-"$HOME/.local/share/openbot-termux"}
+
+fail() { printf 'openbot-termux: %s\n' "$*" >&2; exit 1; }
+say() { printf 'openbot-termux: %s\n' "$*"; }
+
+pull=1
+boot=
+for arg in "$@"; do
+  case "$arg" in
+    --no-pull) pull=0 ;;
+    --boot) boot=--boot ;;
+    *) fail "Usage: update [--no-pull] [--boot]" ;;
+  esac
+done
+
+[ -x "$bin_dir/sv" ] || fail "termux-services is not installed. Install it with pkg, then restart Termux."
+command -v bun >/dev/null 2>&1 || fail "Bun is required to run the Termux backend."
+if [ -e "$service_dir" ] && [ ! -f "$service_dir/.openbot-termux-managed" ]; then
+  fail "The service path already exists and is not managed by this installer: $service_dir"
+fi
+
+# Stop the old service first. Runit waits up to 15 seconds for the process to end.
+if [ -d "$service_dir" ]; then
+  say "Stopping the old service."
+  "$bin_dir/sv" -w 15 down "$service_dir" >/dev/null 2>&1 || true
+fi
+
+if [ "$pull" = 1 ]; then
+  command -v git >/dev/null 2>&1 || fail "git is required to download the new version. Use --no-pull to skip it."
+  before=$(git -C "$root" rev-parse HEAD)
+  say "Downloading the new version."
+  git -C "$root" pull --ff-only || fail "git pull failed. Fix the repository state, then run this script again."
+  after=$(git -C "$root" rev-parse HEAD)
+  if [ "$before" != "$after" ] && git -C "$root" diff --name-only "$before" "$after" | grep -Eq '^(package\.json|bun\.lock)$'; then
+    say "Dependencies changed. Installing them."
+    (cd "$root" && bun install --frozen-lockfile) || fail "bun install failed."
+  fi
+fi
+
+# Remove only what scripts/termux/install made. The data directory keeps the database and the token.
+if [ -d "$service_dir" ]; then
+  say "Removing the old service."
+  rm -rf "$service_dir"
+fi
+rm -f "$bin_dir/openbot-termux"
+
+say "Installing the new service."
+# shellcheck disable=SC2086
+sh "$root/scripts/termux/install" $boot
+
+# Runit starts to supervise a new service directory within a few seconds.
+if [ -x "$bin_dir/sv-enable" ]; then "$bin_dir/sv-enable" openbot >/dev/null 2>&1 || true; fi
+waited=0
+while [ ! -d "$service_dir/supervise" ] && [ "$waited" -lt 20 ]; do
+  sleep 1
+  waited=$((waited + 1))
+done
+[ -d "$service_dir/supervise" ] || fail "Runit did not find the new service. Restart Termux, then run: sv up openbot"
+"$bin_dir/sv" up "$service_dir"
+
+if command -v curl >/dev/null 2>&1; then
+  waited=0
+  until curl -fsS --max-time 2 http://127.0.0.1:8787/health >/dev/null 2>&1; do
+    waited=$((waited + 1))
+    [ "$waited" -lt 30 ] || fail "The server did not answer on 127.0.0.1:8787. Run: openbot-termux logs"
+    sleep 1
+  done
+fi
+
+say "The new server runs. Data and token stay in $data_dir."
+say "Show the token with: openbot-termux token"
