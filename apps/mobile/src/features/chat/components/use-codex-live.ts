@@ -13,6 +13,8 @@ const EASE_OUT = Easing.bezier(0.23, 1, 0.32, 1);
 /** The bridge page loads after the chat: the call waits for it this many times, this long each time. */
 const BRIDGE_WAIT_MS = 500;
 const BRIDGE_WAIT_TRIES = 20;
+/** A call that has not connected after this long fails with a message, instead of waiting forever. */
+const CONNECT_TIMEOUT_MS = 20_000;
 
 export interface CodexLiveInput {
   /** The chat is in front, and the person can write here. */
@@ -62,6 +64,7 @@ export function useCodexLive(input: CodexLiveInput): CodexLive {
   /** Counts the starts and ends, so that an answer to a start that ended goes nowhere. */
   const generation = useRef(0);
   const callOn = useRef(false);
+  const connectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // The phone's own server and its Codex live voice opt-in. Read again when the chat opens.
   const { enabled, serverId, isCodex } = input;
@@ -86,6 +89,7 @@ export function useCodexLive(input: CodexLiveInput): CodexLive {
   }, [enabled, isCodex, serverId]);
 
   const reset = useCallback(() => {
+    clearTimeout(connectTimer.current);
     callOn.current = false;
     sessionRef.current = null;
     setOpen(false);
@@ -122,6 +126,7 @@ export function useCodexLive(input: CodexLiveInput): CodexLive {
           }
           sessionRef.current = session.sessionId;
           bridgeRef.current?.answer({ id, sdp: session.sdp });
+          setPhase("listening");
         })
         .catch((cause: unknown) => {
           if (id !== String(generation.current)) return;
@@ -169,6 +174,12 @@ export function useCodexLive(input: CodexLiveInput): CodexLive {
       bridgeRef.current.start({ id: String(attempt) });
     };
     begin();
+    // Without an answer from the server and the microphone, the call ends with a message.
+    clearTimeout(connectTimer.current);
+    connectTimer.current = setTimeout(() => {
+      if (attempt !== generation.current || sessionRef.current !== null) return;
+      finish(current.current.input.texts.failed);
+    }, CONNECT_TIMEOUT_MS);
   }, [finish, presence]);
 
   const end = useCallback(() => {

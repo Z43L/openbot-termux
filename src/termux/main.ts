@@ -248,6 +248,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
   if (path === "/api/voice/live/start" && request.method === "POST") {
     // The opt-in is checked here, as the desktop host checks it: the voice goes to OpenAI only while it is on.
     if (!state.voiceSettings.codexLive) {
+      logger.info("Codex live voice was refused: the opt-in is off on this server.");
       writeJson(response, 409, { error: "live_voice_off" });
       return;
     }
@@ -257,6 +258,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
       return;
     }
     if (!state.service.listAgents().some((agent) => agent.id === body.agentId)) {
+      logger.warn("Codex live voice was refused: the agent is not on this server.");
       writeJson(response, 404, { error: "agent_not_found" });
       return;
     }
@@ -265,6 +267,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
         state.service.startLiveVoice({ agentId: body.agentId, sdp: body.sdp }, state.voiceSettings.codexLiveVoice),
       );
       state.liveSessions.add(session.sessionId);
+      logger.info("Codex live voice session started.", { sessionId: session.sessionId });
       writeJson(response, 201, session);
     } catch (error) {
       logger.warn("A Codex live voice session could not start.", toLogValue(error));
@@ -279,6 +282,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
       return;
     }
     state.liveSessions.delete(body.sessionId);
+    logger.info("Codex live voice session stopped.", { sessionId: body.sessionId });
     await Effect.runPromise(state.service.stopLiveVoice(body.sessionId));
     writeJson(response, 200, { stopped: true });
     return;

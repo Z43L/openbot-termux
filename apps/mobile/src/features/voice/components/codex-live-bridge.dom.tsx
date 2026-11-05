@@ -31,6 +31,12 @@ interface Props {
 
 const FAILURE = "The voice call could not start on this phone.";
 
+/** The name of the error, such as NotAllowedError for a denied microphone, so the cause shows on screen. */
+function failureWith(error: unknown): string {
+  const name = error instanceof Error ? error.name : "";
+  return name ? `${FAILURE} (${name})` : FAILURE;
+}
+
 /** One audio track and the data channel that Codex App Server expects, as on the desktop. */
 export default function CodexLiveBridge({ ref, onOffer, onFailed }: Props) {
   const peer = useRef<RTCPeerConnection | null>(null);
@@ -77,9 +83,9 @@ export default function CodexLiveBridge({ ref, onOffer, onFailed }: Props) {
           await connection.setLocalDescription(offer);
           if (!offer.sdp) throw new Error(FAILURE);
           onOffer(id, offer.sdp);
-        } catch {
+        } catch (error) {
           release();
-          onFailed(id, FAILURE);
+          onFailed(id, failureWith(error));
         }
       },
       answer: async (request) => {
