@@ -1,3 +1,4 @@
+import type { VoiceLiveEvent } from "@openbot/contracts/ipc";
 import {
   CHANNEL_CHATS_CAPABILITY,
   CHANNEL_DELETE_CAPABILITY,
@@ -55,7 +56,7 @@ export function normalizeLoopbackUrl(value: string): string {
   try {
     parsed = new URL(value.trim());
   } catch {
-    throw new Error(currentText().t("mobile.server.local.invalidUrl"));
+    throw new Error(currentText().t("mobile.server.termux.invalidUrl"));
   }
   if (
     parsed.protocol !== "http:" ||
@@ -65,7 +66,7 @@ export function normalizeLoopbackUrl(value: string): string {
     parsed.search ||
     parsed.hash
   ) {
-    throw new Error(currentText().t("mobile.server.local.invalidUrl"));
+    throw new Error(currentText().t("mobile.server.termux.invalidUrl"));
   }
   return parsed.origin;
 }
@@ -77,10 +78,10 @@ interface SavedLocalServer {
 }
 
 function decodeSavedServers(value: unknown): SavedLocalServer[] {
-  if (!Array.isArray(value)) throw new Error(currentText().t("mobile.server.local.savedSettingsInvalid"));
+  if (!Array.isArray(value)) throw new Error(currentText().t("mobile.server.termux.savedSettingsInvalid"));
   return value.map((item) => {
     if (!isDynamicRecord(item) || !isString(item.id) || !isString(item.name) || !isString(item.url)) {
-      throw new Error(currentText().t("mobile.server.local.savedSettingsInvalid"));
+      throw new Error(currentText().t("mobile.server.termux.savedSettingsInvalid"));
     }
     return { id: item.id, name: item.name, url: item.url };
   });
@@ -98,8 +99,8 @@ export async function readLocalTermuxServers(): Promise<LocalTermuxServerConfig[
   return Promise.all(
     (await readSavedServers()).map(async (item) => {
       const token = await SecureStore.getItemAsync(`${TOKEN_PREFIX}${item.id}`);
-      if (!token) throw new Error(currentText().t("mobile.server.local.savedTokenMissing"));
-      const name = item.name === LEGACY_DEFAULT_NAME ? currentText().t("mobile.server.local.localMode") : item.name;
+      if (!token) throw new Error(currentText().t("mobile.server.termux.savedTokenMissing"));
+      const name = item.name === LEGACY_DEFAULT_NAME ? currentText().t("mobile.server.termux.localMode") : item.name;
       return { id: item.id, name, url: normalizeLoopbackUrl(item.url), token };
     }),
   );
@@ -123,4 +124,15 @@ export async function deleteLocalTermuxServer(id: string): Promise<void> {
   await SecureStore.setItemAsync(STORE_KEY, JSON.stringify(remaining));
   await SecureStore.deleteItemAsync(`${TOKEN_PREFIX}${id}`);
   notifyLocalTermuxServers(remaining.length > 0);
+}
+
+/** A Codex live voice event from the local server. The server sends only these two kinds. */
+export function isVoiceLiveEvent(value: unknown): value is VoiceLiveEvent {
+  if (!isDynamicRecord(value) || !isString(value.sessionId)) return false;
+  if (value.type === "transcript") {
+    return (
+      (value.role === "user" || value.role === "assistant") && isString(value.text) && typeof value.final === "boolean"
+    );
+  }
+  return value.type === "ended" && (value.error === null || isString(value.error));
 }

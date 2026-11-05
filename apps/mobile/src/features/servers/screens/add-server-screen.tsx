@@ -16,12 +16,15 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { AppState, Keyboard, Pressable, View } from "react-native";
 
 import { useMobileSession } from "@/features/auth/context/mobile-session-context";
+import { LocalServerOptions, type LocalServerPathname } from "@/features/servers/components/local-server-options";
+import { TermuxServerForm } from "@/features/servers/components/termux-server-form";
 import { SERVER_ROLE_KEYS } from "@/features/servers/model/server-role";
 import { useMobileWorkspace } from "@/features/workspace/context/mobile-workspace-context";
 import { useLiveServerRecovery } from "@/features/workspace/context/server-recovery-countdown";
 import { ErrorReference } from "@/shared/components/error-reference";
 import { SheetFormField } from "@/shared/components/sheet-form-field";
 import { SheetScrollView } from "@/shared/components/sheet-scroll-view";
+import { readClipboardText } from "@/shared/lib/clipboard";
 import { haptics } from "@/shared/lib/haptics";
 import { isIOS } from "@/shared/lib/platform";
 import { currentText, useText } from "@/shared/lib/text";
@@ -54,6 +57,7 @@ export function AddServerScreen({
   onJoined,
   scanHref = "/add-server/scan",
   underHeader = false,
+  localServerPathname,
 }: {
   initialInvite?: string;
   onJoined?: () => void;
@@ -61,11 +65,12 @@ export function AddServerScreen({
   scanHref?: Href;
   /** An inner page under a native header: its back button replaces Cancel. */
   underHeader?: boolean;
+  /** The create page of a server on an owned computer, in this sheet. Without it, the page offers none. */
+  localServerPathname?: LocalServerPathname;
 } = {}) {
   const { t, format, errorDetails, sourceText } = useText();
   const [foreground, accentForeground, success] = useThemeColor(["foreground", "accent-foreground", "success"]);
   const { addRemoteServer, servers, teamDirectory } = useMobileWorkspace();
-  const { addLocalTermuxServer } = useMobileWorkspace();
   const { session } = useMobileSession();
   const inviteLinks = { selfHostedApiOrigin: selfHostedApiOrigin(session?.apiUrl) };
   const [joinedId, setJoinedId] = useState<string | null>(null);
@@ -81,10 +86,8 @@ export function AddServerScreen({
   const [previewing, setPreviewing] = useState(false);
   const [error, setError] = useState<UserErrorDetails | null>(null);
   const [joining, setJoining] = useState(false);
+  // The phone's own server (OpenBot Termux) connects with its URL and token, not with an invitation.
   const [connectionMode, setConnectionMode] = useState<"cloud" | "local">("cloud");
-  const [localName, setLocalName] = useState(() => t("mobile.server.local.localMode"));
-  const [localUrl, setLocalUrl] = useState("http://127.0.0.1:8787");
-  const [localToken, setLocalToken] = useState("");
   const joinInFlight = useRef(false);
   usePreventRemove(joining, () => {
     // A join can consume a single-use token; wait for its result before leaving.
@@ -144,27 +147,6 @@ export function AddServerScreen({
     setJoining(false);
   }
 
-  async function connectLocalServer(): Promise<void> {
-    if (!localName.trim() || !localToken.trim() || joining) return;
-    setJoining(true);
-    setError(null);
-    Keyboard.dismiss();
-    try {
-      const serverId = await addLocalTermuxServer({
-        name: localName.trim(),
-        url: localUrl.trim(),
-        token: localToken.trim(),
-      });
-      setJoinedId(serverId);
-      void haptics.notification("success");
-    } catch (cause) {
-      setError(errorDetails(cause, t("mobile.server.local.connectFailed")));
-      void haptics.notification("error");
-    } finally {
-      setJoining(false);
-    }
-  }
-
   const connected = joinedServer?.state === "online";
   const joinStatus = joinedServer?.connectionMessage
     ? sourceText(joinedServer.connectionMessage)
@@ -195,23 +177,38 @@ export function AddServerScreen({
             ? connected
               ? t("mobile.server.join.connected")
               : t("mobile.server.join.accepted")
-            : connectionMode === "cloud"
-              ? t("mobile.server.join.title")
-              : t("mobile.server.local.title")}
+            : t("mobile.server.join.title")}
         </Typography.Heading>
         <Typography.Paragraph type="body-sm" align="center" className="max-w-80 text-text-secondary">
           {joinedId
             ? connected && joinedServer
               ? t("mobile.server.join.connectedTo", { name: joinedServer.name })
               : joinedStatus(joinedServer?.name, joinStatus)
-            : connectionMode === "cloud"
-              ? t("mobile.server.join.description")
-              : t("mobile.server.local.description")}
+            : t("mobile.server.join.description")}
         </Typography.Paragraph>
         {joinedId && !connected ? (
           <ErrorReference reference={joinedServer?.connectionFailure?.reference} align="center" />
         ) : null}
       </View>
+
+      {joinedId ? null : (
+        <View className="flex-row gap-3">
+          <Button
+            className="flex-1"
+            variant={connectionMode === "cloud" ? "primary" : "secondary"}
+            onPress={() => setConnectionMode("cloud")}
+          >
+            <Button.Label>{t("mobile.server.termux.cloudMode")}</Button.Label>
+          </Button>
+          <Button
+            className="flex-1"
+            variant={connectionMode === "local" ? "primary" : "secondary"}
+            onPress={() => setConnectionMode("local")}
+          >
+            <Button.Label>{t("mobile.server.termux.localMode")}</Button.Label>
+          </Button>
+        </View>
+      )}
 
       {joinedId ? (
         <Button
@@ -224,163 +221,101 @@ export function AddServerScreen({
         >
           <Button.Label className="font-sans font-semibold">{t("common.done")}</Button.Label>
         </Button>
+      ) : connectionMode === "local" ? (
+        <TermuxServerForm disabled={joining} onConnected={setJoinedId} />
       ) : (
         <View className="gap-4">
-          <View className="flex-row gap-3">
-            <Button
-              className="flex-1"
-              variant={connectionMode === "cloud" ? "primary" : "secondary"}
-              onPress={() => setConnectionMode("cloud")}
-            >
-              <Button.Label>{t("mobile.server.local.cloudMode")}</Button.Label>
-            </Button>
-            <Button
-              className="flex-1"
-              variant={connectionMode === "local" ? "primary" : "secondary"}
-              onPress={() => setConnectionMode("local")}
-            >
-              <Button.Label>{t("mobile.server.local.localMode")}</Button.Label>
-            </Button>
+          <View className="gap-3">
+            <SheetFormField
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!joining}
+              hideLabel
+              inputMode="url"
+              label={t("mobile.server.join.inviteLink")}
+              maxLength={500}
+              placeholder={INVITE_PLACEHOLDER}
+              returnKeyType="go"
+              value={inviteLink}
+              onChangeText={changeLink}
+              onSubmitEditing={() => void joinServer()}
+            />
+            <View className="flex-row gap-3">
+              <PasteInviteButton disabled={joining} onPaste={changeLink} />
+              <QuickAction
+                accessibilityLabel={t("mobile.server.join.scan")}
+                disabled={joining}
+                icon={<ScanLine size={18} strokeWidth={1.8} color={foreground} />}
+                label={t("mobile.server.join.scanShort")}
+                onPress={() => {
+                  Keyboard.dismiss();
+                  router.push(scanHref);
+                }}
+              />
+            </View>
           </View>
-          {connectionMode === "local" ? (
-            <View className="gap-3">
-              <SheetFormField
-                autoCapitalize="none"
-                autoCorrect={false}
-                editable={!joining}
-                label={t("mobile.server.local.name")}
-                maxLength={80}
-                value={localName}
-                onChangeText={setLocalName}
-              />
-              <SheetFormField
-                autoCapitalize="none"
-                autoCorrect={false}
-                editable={!joining}
-                inputMode="url"
-                label={t("mobile.server.local.url")}
-                value={localUrl}
-                onChangeText={setLocalUrl}
-              />
-              <SheetFormField
-                autoCapitalize="none"
-                autoCorrect={false}
-                editable={!joining}
-                label={t("mobile.server.local.token")}
-                secureTextEntry
-                value={localToken}
-                onChangeText={setLocalToken}
-              />
-              {error ? (
-                <Typography.Paragraph accessibilityRole="alert" className="text-danger-text">
-                  {error.message}
-                </Typography.Paragraph>
-              ) : null}
-              <Button
-                size="lg"
-                isDisabled={joining || !localName.trim() || !localToken.trim()}
-                onPress={() => void connectLocalServer()}
-              >
-                <Button.Label className="font-sans font-semibold">
-                  {joining ? t("common.connecting") : t("mobile.server.local.connect")}
-                </Button.Label>
-              </Button>
-              <Typography.Paragraph type="body-xs" className="text-text-secondary">
-                {t("mobile.server.local.loopbackOnly")}
-              </Typography.Paragraph>
-            </View>
-          ) : (
-            <View className="gap-4">
-              <View className="gap-3">
-                <SheetFormField
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  editable={!joining}
-                  hideLabel
-                  inputMode="url"
-                  label={t("mobile.server.join.inviteLink")}
-                  maxLength={500}
-                  placeholder={INVITE_PLACEHOLDER}
-                  returnKeyType="go"
-                  value={inviteLink}
-                  onChangeText={changeLink}
-                  onSubmitEditing={() => void joinServer()}
-                />
-                <View className="flex-row gap-3">
-                  <PasteInviteButton disabled={joining} onPaste={changeLink} />
-                  <QuickAction
-                    accessibilityLabel={t("mobile.server.join.scan")}
-                    disabled={joining}
-                    icon={<ScanLine size={18} strokeWidth={1.8} color={foreground} />}
-                    label={t("mobile.server.join.scanShort")}
-                    onPress={() => {
-                      Keyboard.dismiss();
-                      router.push(scanHref);
-                    }}
-                  />
-                </View>
+
+          {reviewedInvite ? (
+            <View className="flex-row items-center gap-3 rounded-grouped bg-grouped px-4 py-3.5">
+              <View className="size-11 items-center justify-center rounded-xl bg-accent">
+                <Server color={accentForeground} size={21} strokeWidth={1.8} />
               </View>
-
-              {reviewedInvite ? (
-                <View className="flex-row items-center gap-3 rounded-grouped bg-grouped px-4 py-3.5">
-                  <View className="size-11 items-center justify-center rounded-xl bg-accent">
-                    <Server color={accentForeground} size={21} strokeWidth={1.8} />
-                  </View>
-                  <View className="min-w-0 flex-1 gap-0.5">
-                    <Typography.Paragraph weight="semibold" numberOfLines={1}>
-                      {preview?.hostName ??
-                        (previewing ? t("mobile.server.invite.checking") : t("mobile.server.invite.unavailable"))}
-                    </Typography.Paragraph>
-                    <Typography.Paragraph type="body-xs" className="text-text-secondary" numberOfLines={1}>
-                      {preview
-                        ? describeInvite(preview, t, format)
-                        : previewing
-                          ? t("mobile.server.invite.verifying")
-                          : t("mobile.server.invite.verifyRequired")}
-                    </Typography.Paragraph>
-                  </View>
-                  {previewing ? <Spinner size="sm" color={String(foreground)} /> : null}
-                </View>
-              ) : null}
-
-              {error ? (
-                <View className="items-center gap-1">
-                  <Typography.Paragraph accessibilityRole="alert" align="center" className="text-danger-text">
-                    {error.message}
-                  </Typography.Paragraph>
-                  <ErrorReference reference={error.reference} align="center" />
-                </View>
-              ) : null}
-
-              {/* The join button shows once the field has text, so an empty sheet has no dimmed button. */}
-              {!inviteLink.trim() ? null : preview || !reviewedInvite || previewing ? (
-                <Button size="lg" isDisabled={!preview || joining || previewing} onPress={() => void joinServer()}>
-                  <Button.Label className="font-sans font-semibold">
-                    {joining ? t("mobile.server.join.joining") : t("mobile.server.join.submit")}
-                  </Button.Label>
-                </Button>
-              ) : (
-                <Button size="lg" onPress={() => setRequest({ url: reviewedInvite })}>
-                  <Button.Label className="font-sans font-semibold">{t("common.tryAgain")}</Button.Label>
-                </Button>
-              )}
-
-              {underHeader ? null : (
-                <Pressable
-                  accessibilityRole="button"
-                  className="min-h-11 items-center justify-center"
-                  disabled={joining}
-                  onPress={() => {
-                    void haptics.impact("soft");
-                    router.back();
-                  }}
-                >
-                  <Typography.Paragraph weight="semibold" className="text-text-secondary">
-                    {t("common.cancel")}
-                  </Typography.Paragraph>
-                </Pressable>
-              )}
+              <View className="min-w-0 flex-1 gap-0.5">
+                <Typography.Paragraph weight="semibold" numberOfLines={1}>
+                  {preview?.hostName ??
+                    (previewing ? t("mobile.server.invite.checking") : t("mobile.server.invite.unavailable"))}
+                </Typography.Paragraph>
+                <Typography.Paragraph type="body-xs" className="text-text-secondary" numberOfLines={1}>
+                  {preview
+                    ? describeInvite(preview, t, format)
+                    : previewing
+                      ? t("mobile.server.invite.verifying")
+                      : t("mobile.server.invite.verifyRequired")}
+                </Typography.Paragraph>
+              </View>
+              {previewing ? <Spinner size="sm" color={String(foreground)} /> : null}
             </View>
+          ) : null}
+
+          {error ? (
+            <View className="items-center gap-1">
+              <Typography.Paragraph accessibilityRole="alert" align="center" className="text-danger-text">
+                {error.message}
+              </Typography.Paragraph>
+              <ErrorReference reference={error.reference} align="center" />
+            </View>
+          ) : null}
+
+          {/* The join button shows once the field has text, so an empty sheet has no dimmed button. */}
+          {!inviteLink.trim() ? null : preview || !reviewedInvite || previewing ? (
+            <Button size="lg" isDisabled={!preview || joining || previewing} onPress={() => void joinServer()}>
+              <Button.Label className="font-sans font-semibold">
+                {joining ? t("mobile.server.join.joining") : t("mobile.server.join.submit")}
+              </Button.Label>
+            </Button>
+          ) : (
+            <Button size="lg" onPress={() => setRequest({ url: reviewedInvite })}>
+              <Button.Label className="font-sans font-semibold">{t("common.tryAgain")}</Button.Label>
+            </Button>
+          )}
+
+          {/* Another way to get a server: one more on a computer that runs OpenBot, while no link is typed. */}
+          {localServerPathname && !inviteLink.trim() ? <LocalServerOptions pathname={localServerPathname} /> : null}
+
+          {underHeader ? null : (
+            <Pressable
+              accessibilityRole="button"
+              className="min-h-11 items-center justify-center"
+              disabled={joining}
+              onPress={() => {
+                void haptics.impact("soft");
+                router.back();
+              }}
+            >
+              <Typography.Paragraph weight="semibold" className="text-text-secondary">
+                {t("common.cancel")}
+              </Typography.Paragraph>
+            </Pressable>
           )}
         </View>
       )}
@@ -439,7 +374,7 @@ function PasteInviteButton({ disabled, onPaste }: { disabled: boolean; onPaste: 
       icon={<ClipboardPaste size={18} strokeWidth={1.8} color={foreground} />}
       label={t("mobile.server.join.paste")}
       onPress={() => {
-        void readClipboardLink().then(
+        void readClipboardText().then(
           (value) => {
             if (value) onPaste(value);
           },
@@ -448,12 +383,6 @@ function PasteInviteButton({ disabled, onPaste }: { disabled: boolean; onPaste: 
       }}
     />
   );
-}
-
-async function readClipboardLink(): Promise<string> {
-  const text = (await Clipboard.getStringAsync()).trim();
-  if (text) return text;
-  return ((await Clipboard.getUrlAsync()) ?? "").trim();
 }
 
 /**

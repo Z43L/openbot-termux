@@ -11,10 +11,14 @@ module.exports = function withLoopbackCleartext(config) {
     application.$["android:networkSecurityConfig"] = "@xml/openbot_network_security_config";
     return mod;
   });
-  return withDangerousMod(config, ["android", async (mod) => {
-    const directory = path.join(mod.modRequest.platformProjectRoot, "app/src/main/res/xml");
-    await fs.mkdir(directory, { recursive: true });
-    await fs.writeFile(path.join(directory, "openbot_network_security_config.xml"), `<?xml version="1.0" encoding="utf-8"?>
+  return withDangerousMod(config, [
+    "android",
+    async (mod) => {
+      const directory = path.join(mod.modRequest.platformProjectRoot, "app/src/main/res/xml");
+      await fs.mkdir(directory, { recursive: true });
+      await fs.writeFile(
+        path.join(directory, "openbot_network_security_config.xml"),
+        `<?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
   <base-config cleartextTrafficPermitted="false" />
   <domain-config cleartextTrafficPermitted="true">
@@ -22,7 +26,9 @@ module.exports = function withLoopbackCleartext(config) {
     <domain>localhost</domain>
   </domain-config>
 </network-security-config>
-`);
-    return mod;
-  }]);
+`,
+      );
+      return mod;
+    },
+  ]);
 };

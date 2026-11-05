@@ -11,9 +11,9 @@
     "scripts/**/*.ts",
     "tools/vitest/**/*.ts",
     "src/backend/**/*.ts",
-    "src/termux/**/*.ts",
     "src/main/**/*.ts",
     "src/preload/**/*.ts",
+    "src/termux/**/*.ts",
     "packages/contracts/src/**/*.ts",
     "packages/logging/src/**/*.ts"
   ]

@@ -95,6 +95,27 @@ The route and API calls compile in Metro. They have not run in the Android appli
 creation or message from this screen has been observed. Expo Go did not launch in this environment,
 so SecureStore and the Android HTTP policy remain untested in the app.
 
+### Codex live voice on the phone
+
+Codex live voice needs the Codex CLI on the Termux server, signed in with ChatGPT. A Codex agent of
+the local server can talk in real time:
+
+- Settings > Voice > Listening > **Codex live voice** turns it on. The setting is stored by the
+  server in `voice-live.json` in the data directory. It is off until the user turns it on. While it
+  is off, the server refuses a live voice start with HTTP 409.
+- The chat mic of a Codex agent on OpenBot Local starts the call. The phone's WebRTC peer, in a hidden
+  page (`codex-live-bridge.dom.tsx`), holds the microphone and plays the reply. It sends its offer to
+  `POST /api/voice/live/start`. The server asks Codex App Server for a realtime call with
+  `AgentService.startLiveVoice`, and returns the answer. Turns of the voice model run in the agent's
+  chat.
+- The server sends the call's transcript and end on the WebSocket as `{ "type": "voice-live" }`
+  messages. `POST /api/voice/live/stop` ends a call.
+- Other agents, other servers and the account servers keep the on-device voice of the app.
+
+Not verified: a real call with a ChatGPT sign-in, the WebRTC peer in the Android WebView (microphone
+permission, audio playback and echo cancellation), and interrupt, which here ends the call and starts
+it again on the same thread.
+
 ## Verification
 
 - The authenticated `/api/agents`, `/api/agents/:id/conversation-page`, `/api/reads`,

@@ -1,5 +1,8 @@
 # OpenBot on native Termux
 
+This branch ports the Termux server and the OpenBot Local mode to upstream v0.62.0
+(`nightly-labs/openbot`). The Termux code is `src/termux/`; it type-checks with `typecheck:node`.
+
 ## Current result
 
 `src/termux/main.ts` starts a server without importing Electron. It initializes the original
@@ -63,6 +66,9 @@ Available routes:
 - `GET /api/reads` (local mobile read state)
 - `POST /api/agents/:id/messages`
 - `GET /api/events` (authenticated SSE endpoint and WebSocket upgrade for AgentService events)
+- `GET /api/voice/live`, `PUT /api/voice/live` (Codex live voice opt-in, stored in `voice-live.json`)
+- `POST /api/voice/live/start` (WebRTC offer in, answer out; 409 while the opt-in is off)
+- `POST /api/voice/live/stop`
 
 The `/v1/` routes are the Team API routes of the desktop host, served by the same route code over
 HTTP on loopback. A phone names its protocol and capabilities in the `OpenBot-Protocol-Version` and
@@ -120,6 +126,7 @@ supervised recovery after an unexpected process crash remain unverified.
 | HTTP authentication and local binding | Implemented and tested | Unauthenticated request returned 401; bind is loopback |
 | Event delivery | Implemented and tested | Authenticated WebSocket delivered the original completed-turn event; SSE still responds |
 | Browser/computer-use agents | Disabled | Termux `AgentBrowserHost` rejects browser operations |
+| Codex live voice | Implemented, not run with a ChatGPT sign-in | Routes call `AgentService.startLiveVoice`; the phone holds the WebRTC peer |
 | Official Team API, Signal and WebRTC | Not implemented | The Electron host bridge is unavailable on Android; local mode is separate |
 | Android app connection | Partly implemented | Local sign-in-free route and API screen compile in Metro; the screen was not run on Android |
 | runit | Running | `sv status openbot` reported `run`; service restarted and API routes returned 200 |

@@ -323,7 +323,7 @@ export function OptionsPane({
       <PaneItem index={2} motion={motion} className="mt-7 gap-3">
         <SignInButton brand icon={ScanLine} label={t("mobile.auth.scanQrCode")} onPress={onScan} reduced={reduced} />
         <SignInButton brand={false} label={t("mobile.auth.signIn.emailButton")} onPress={onEmail} reduced={reduced} />
-        <SignInButton brand={false} label={t("mobile.server.local.localMode")} onPress={onLocal} reduced={reduced} />
+        <SignInButton brand={false} label={t("mobile.server.termux.localMode")} onPress={onLocal} reduced={reduced} />
       </PaneItem>
       <PaneItem index={3} motion={motion}>
         <HelpToggle open={helpOpen} onToggle={onToggleHelp} onBodyLayout={onHelpLayout} reduced={reduced} />

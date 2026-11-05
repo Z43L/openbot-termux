@@ -89,9 +89,13 @@ export function pendingSignInLinkId(): string | undefined {
   return [...requests].reverse().find(([, link]) => link.kind === "invite" || link.kind === "template")?.[0];
 }
 
-export function redirectIncomingLink(path: string): string {
-  // The launcher opens the app on the root of its own scheme: `openbot://`, or `openbot-local-termux://`.
-  if (/^[a-z][a-z0-9+.-]*:(\/\/\/?)?$/iu.test(path)) return "/";
+/**
+ * Other apps open a bare `openbot://` only to bring OpenBot back. In a running app, the route `/` resets
+ * the navigation and mounts the server connections again, so the running app stays where it is. The
+ * Termux launcher opens the root of `openbot-local-termux://` the same way.
+ */
+export function redirectIncomingLink(path: string, initial: boolean): string | null {
+  if (/^openbot(-local-termux)?:(\/\/\/?)?$/iu.test(path)) return initial ? "/" : null;
   // Expo Go and ordinary internal routes retain Expo Router's normal behavior.
   if (/^exps?:\/\//u.test(path)) return path;
   if (path.startsWith("/") && !path.startsWith("//")) {

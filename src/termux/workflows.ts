@@ -34,9 +34,7 @@ export const createTermuxWorkflows = Effect.fn("createTermuxWorkflows")(function
     turnAnswer: (agentId, turnId) => {
       const threadId = store.list().find((agent) => agent.id === agentId)?.threadId;
       if (!threadId) return null;
-      return (
-        latestTurnAnswer(store.database.readTurnAssistantMessages(agentId, threadId, turnId), turnId)?.text ?? null
-      );
+      return latestTurnAnswer(store.database.readTurnAssistantMessages(agentId, turnId), turnId)?.text ?? null;
     },
     sendHandoff: (input) => service.enqueueRoutineHandoff(input),
     stopDelivery: (agentId, deliveryId) => {
