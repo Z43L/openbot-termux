@@ -22,8 +22,8 @@ module.exports = function withLoopbackCleartext(config) {
 <network-security-config>
   <base-config cleartextTrafficPermitted="false" />
   <domain-config cleartextTrafficPermitted="true">
-    <domain>127.0.0.1</domain>
-    <domain>localhost</domain>
+    <domain includeSubdomains="true">127.0.0.1</domain>
+    <domain includeSubdomains="true">localhost</domain>
   </domain-config>
 </network-security-config>
 `,

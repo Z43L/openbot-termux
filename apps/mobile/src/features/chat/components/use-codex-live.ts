@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 import { Easing, useSharedValue, withTiming } from "react-native-reanimated";
-import type { CodexLiveBridgeHandle } from "@/features/voice/components/codex-live-bridge.dom";
+import type { CodexLiveBridgeHandle } from "@/features/voice/components/codex-live-bridge";
 import { subscribeLocalVoiceLive } from "@/features/voice/model/local-live-voice";
 import { type LocalTermuxServerConfig, readLocalTermuxServers } from "@/features/workspace/model/local-termux-server";
 import { LocalTermuxTransport } from "@/features/workspace/model/local-termux-transport";
@@ -12,13 +12,16 @@ const PRESENCE_MS = 420;
 const EASE_OUT = Easing.bezier(0.23, 1, 0.32, 1);
 /** The bridge page loads after the chat: the call waits for it this many times, this long each time. */
 const BRIDGE_WAIT_MS = 500;
-const BRIDGE_WAIT_TRIES = 20;
+/** The first load of the bridge page takes several seconds on a phone: the call waits up to a minute. */
+const BRIDGE_WAIT_TRIES = 120;
 /** A call that has not connected after this long fails with a message, instead of waiting forever. */
 const CONNECT_TIMEOUT_MS = 20_000;
 
 export interface CodexLiveInput {
-  /** The chat is in front, and the person can write here. */
+  /** The person can write here: the call is offered, and the server answers. */
   enabled: boolean;
+  /** The chat is in front. Only leaving the chat ends a call; a short loss of the connection does not. */
+  focused: boolean;
   /** The server of the chat. A call runs only on the phone's own local server. */
   serverId: string;
   agentId: string;
@@ -35,7 +38,8 @@ export interface CodexLive {
   mounted: boolean;
   /** Props of the bridge page that holds the WebRTC peer. */
   bridge: {
-    ref: (handle: CodexLiveBridgeHandle | null) => void;
+    /** An object ref: the Expo DOM page fills it, and a callback ref is never called. */
+    ref: RefObject<CodexLiveBridgeHandle | null>;
     onOffer: (id: string, sdp: string) => void;
     onFailed: (id: string, message: string) => void;
   };
@@ -67,7 +71,7 @@ export function useCodexLive(input: CodexLiveInput): CodexLive {
   const connectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // The phone's own server and its Codex live voice opt-in. Read again when the chat opens.
-  const { enabled, serverId, isCodex } = input;
+  const { enabled, focused, serverId, isCodex } = input;
   useEffect(() => {
     if (!enabled || !isCodex) return;
     let active = true;
@@ -125,7 +129,7 @@ export function useCodexLive(input: CodexLiveInput): CodexLive {
             return;
           }
           sessionRef.current = session.sessionId;
-          bridgeRef.current?.answer({ id, sdp: session.sdp });
+          bridgeRef.current?.answer(id, session.sdp);
           setPhase("listening");
         })
         .catch((cause: unknown) => {
@@ -144,10 +148,6 @@ export function useCodexLive(input: CodexLiveInput): CodexLive {
     [finish],
   );
 
-  const bridgeReference = useCallback((handle: CodexLiveBridgeHandle | null) => {
-    bridgeRef.current = handle;
-  }, []);
-
   const start = useCallback(() => {
     const { config, input } = current.current;
     if (!config || !input.isCodex || callOn.current) return;
@@ -162,7 +162,8 @@ export function useCodexLive(input: CodexLiveInput): CodexLive {
     let tries = 0;
     const begin = () => {
       if (attempt !== generation.current) return;
-      if (!bridgeRef.current) {
+      // The page's methods exist only after the page reports that it is ready.
+      if (typeof bridgeRef.current?.start !== "function") {
         tries += 1;
         if (tries > BRIDGE_WAIT_TRIES) {
           finish(current.current.input.texts.failed);
@@ -171,15 +172,15 @@ export function useCodexLive(input: CodexLiveInput): CodexLive {
         setTimeout(begin, BRIDGE_WAIT_MS);
         return;
       }
-      bridgeRef.current.start({ id: String(attempt) });
+      bridgeRef.current.start(String(attempt));
+      // Without an answer from the server and the microphone, the call ends with a message.
+      clearTimeout(connectTimer.current);
+      connectTimer.current = setTimeout(() => {
+        if (attempt !== generation.current || sessionRef.current !== null) return;
+        finish(current.current.input.texts.failed);
+      }, CONNECT_TIMEOUT_MS);
     };
     begin();
-    // Without an answer from the server and the microphone, the call ends with a message.
-    clearTimeout(connectTimer.current);
-    connectTimer.current = setTimeout(() => {
-      if (attempt !== generation.current || sessionRef.current !== null) return;
-      finish(current.current.input.texts.failed);
-    }, CONNECT_TIMEOUT_MS);
   }, [finish, presence]);
 
   const end = useCallback(() => {
@@ -191,7 +192,7 @@ export function useCodexLive(input: CodexLiveInput): CodexLive {
   const toggleMute = useCallback(() => {
     const next = !muted;
     setMuted(next);
-    bridgeRef.current?.setMuted({ muted: next });
+    bridgeRef.current?.setMuted(next);
   }, [muted]);
 
   // The server's events of the call: what the user says, the reply that is spoken, and the end.
@@ -216,12 +217,13 @@ export function useCodexLive(input: CodexLiveInput): CodexLive {
     });
   }, [config, finish, level]);
 
-  // Leaving the chat, or turning the voice off, ends the call.
+  // Leaving the chat ends the call. A reconnect that makes the chat read-only for a moment does not.
   useEffect(() => {
-    if (!enabled && callOn.current) end();
-  }, [enabled, end]);
+    if (!focused && callOn.current) end();
+  }, [focused, end]);
 
   const available = enabled && isCodex && optedIn && config !== null;
+  // The bridge page holds the microphone, so it stays mounted while the call is open.
   const live: LiveConversation = {
     available,
     open,
@@ -243,5 +245,5 @@ export function useCodexLive(input: CodexLiveInput): CodexLive {
     },
     end,
   };
-  return { live, mounted: available, bridge: { ref: bridgeReference, onOffer, onFailed } };
+  return { live, mounted: available || open, bridge: { ref: bridgeRef, onOffer, onFailed } };
 }

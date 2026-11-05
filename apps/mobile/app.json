@@ -116,7 +116,8 @@
           "android": {
             "usesCleartextTraffic": true,
             "enableMinifyInReleaseBuilds": true,
-            "enableShrinkResourcesInReleaseBuilds": true
+            "enableShrinkResourcesInReleaseBuilds": true,
+            "extraProguardRules": "-dontwarn org.webrtc.Dav1dDecoder$Natives"
           }
         }
       ],
@@ -203,6 +204,13 @@
         {
           "microphonePermission": "Allow OpenBot to use the microphone to dictate messages.",
           "speechRecognitionPermission": "Allow OpenBot to turn your speech into message text."
+        }
+      ],
+      [
+        "@config-plugins/react-native-webrtc",
+        {
+          "microphonePermission": "Allow OpenBot to use the microphone for Codex live voice.",
+          "cameraPermission": false
         }
       ],
       [

@@ -953,6 +953,7 @@
   "mobile.server.termux.codexLive.footer": ["ar", "de", "fr", "it", "ja", "ko", "nl", "pl", "pt", "ru", "tr", "zh"],
   "mobile.server.termux.codexLive.title": ["ar", "de", "fr", "it", "ja", "ko", "nl", "pl", "pt", "ru", "tr", "zh"],
   "mobile.server.termux.codexLive.toggle": ["ar", "de", "fr", "it", "ja", "ko", "nl", "pl", "pt", "ru", "tr", "zh"],
+  "mobile.server.termux.codexLive.voice": ["ar", "de", "fr", "it", "ja", "ko", "nl", "pl", "pt", "ru", "tr", "zh"],
   "mobile.server.termux.connect": ["ar", "de", "fr", "it", "ja", "ko", "nl", "pl", "pt", "ru", "tr", "zh"],
   "mobile.server.termux.connectFailed": ["ar", "de", "fr", "it", "ja", "ko", "nl", "pl", "pt", "ru", "tr", "zh"],
   "mobile.server.termux.createAgent": ["ar", "de", "fr", "it", "ja", "ko", "nl", "pl", "pt", "ru", "tr", "zh"],

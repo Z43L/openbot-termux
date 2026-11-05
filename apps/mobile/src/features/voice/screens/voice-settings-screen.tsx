@@ -1,4 +1,4 @@
-import { SPEECH_SPEEDS, type SpeechVoice } from "@openbot/contracts/ipc";
+import { CODEX_LIVE_VOICES, SPEECH_SPEEDS, type SpeechVoice } from "@openbot/contracts/ipc";
 import type { MobileTranslate } from "@openbot/i18n/mobile";
 import { isRunningInExpoGo } from "expo";
 import { router } from "expo-router";
@@ -101,7 +101,9 @@ function CodexLiveSection({ onError }: { onError: (message: string) => void }) {
   const { theme } = useUniwind();
   const [server, setServer] = useState<LocalTermuxServerConfig | null>(null);
   const [on, setOn] = useState(false);
+  const [voice, setVoice] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const mark = useCheckMark();
   useEffect(() => {
     let active = true;
     void readLocalTermuxServers()
@@ -111,7 +113,9 @@ function CodexLiveSection({ onError }: { onError: (message: string) => void }) {
         setServer(first);
         if (!first) return;
         const settings = await new LocalTermuxTransport(first).readLiveVoiceSettings();
-        if (active) setOn(settings.codexLive);
+        if (!active) return;
+        setOn(settings.codexLive);
+        setVoice(settings.codexLiveVoice);
       })
       .catch(() => undefined);
     return () => {
@@ -119,32 +123,49 @@ function CodexLiveSection({ onError }: { onError: (message: string) => void }) {
     };
   }, []);
   if (!server) return null;
-  const change = (codexLive: boolean) => {
+  const save = (change: { codexLive: boolean; codexLiveVoice: string | null }) => {
     setSaving(true);
     void new LocalTermuxTransport(server)
-      .saveLiveVoiceSettings({ codexLive, codexLiveVoice: null })
+      .saveLiveVoiceSettings(change)
       .then((saved) => {
         setOn(saved.codexLive);
+        setVoice(saved.codexLiveVoice);
         void haptics.selection();
       })
       .catch(() => onError(t("mobile.settings.saveFailed")))
       .finally(() => setSaving(false));
   };
   return (
-    <SettingsSection
-      title={t("mobile.server.termux.codexLive.title")}
-      footer={t("mobile.server.termux.codexLive.footer")}
-    >
-      <SettingsRow>
-        <SettingsSwitch
-          value={on}
-          disabled={saving}
-          label={t("mobile.server.termux.codexLive.toggle")}
-          dark={theme === "dark"}
-          onValueChange={change}
-        />
-      </SettingsRow>
-    </SettingsSection>
+    <>
+      <SettingsSection
+        title={t("mobile.server.termux.codexLive.title")}
+        footer={t("mobile.server.termux.codexLive.footer")}
+      >
+        <SettingsRow>
+          <SettingsSwitch
+            value={on}
+            disabled={saving}
+            label={t("mobile.server.termux.codexLive.toggle")}
+            dark={theme === "dark"}
+            onValueChange={(codexLive) => save({ codexLive, codexLiveVoice: voice })}
+          />
+        </SettingsRow>
+      </SettingsSection>
+      <SettingsSection title={t("mobile.server.termux.codexLive.voice")}>
+        {CODEX_LIVE_VOICES.map((name) => (
+          <SettingsRow
+            key={name}
+            disabled={saving}
+            disclosure={false}
+            checked={voice === name}
+            trailing={mark(voice === name)}
+            onPress={() => save({ codexLive: on, codexLiveVoice: name })}
+          >
+            {name}
+          </SettingsRow>
+        ))}
+      </SettingsSection>
+    </>
   );
 }
 

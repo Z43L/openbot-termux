@@ -41,6 +41,7 @@ export const messages = defineMessages("mobile.server", {
   "mobile.server.termux.codexLive.toggle": "Talk with Codex agents",
   "mobile.server.termux.codexLive.footer":
     "On this phone, Codex agents talk in real time with your Codex sign-in. The voice goes to OpenAI while this is on.",
+  "mobile.server.termux.codexLive.voice": "Voice",
   "mobile.server.drawer.termux": "OpenBot Local",
   "mobile.server.drawer.remote": "Remote",
   "mobile.server.drawer.routines": "Routines",

@@ -43,6 +43,7 @@ export const messages = {
   "mobile.server.termux.codexLive.toggle": "Hablar con agentes de Codex",
   "mobile.server.termux.codexLive.footer":
     "En este teléfono, los agentes de Codex hablan en tiempo real con tu sesión de Codex. El audio se envía a OpenAI mientras esto esté activado.",
+  "mobile.server.termux.codexLive.voice": "Voz",
   "mobile.server.drawer.termux": "OpenBot Local",
   "mobile.server.drawer.remote": "Remoto",
   "mobile.server.drawer.routines": "Rutinas",

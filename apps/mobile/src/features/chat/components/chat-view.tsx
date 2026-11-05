@@ -43,8 +43,7 @@ import {
   presentChatMessages,
 } from "@/features/chat/model/chat-messages";
 import { finishedTurnSummaries, type TurnStepsSummary } from "@/features/chat/model/turn-thinking";
-import CodexLiveBridge from "@/features/voice/components/codex-live-bridge.dom";
-import { CODEX_BRIDGE_DOM } from "@/features/voice/components/codex-live-bridge-options";
+import { CodexLiveBridge } from "@/features/voice/components/codex-live-bridge";
 import { replyVoiceReady } from "@/features/voice/model/reply-voice";
 import { ConnectionStatus } from "@/features/workspace/components/connection-status";
 import { useTurnStepLines } from "@/features/workspace/components/use-agent-activity";
@@ -659,14 +658,16 @@ export function ChatView({
   // Codex live voice runs on the phone's own server, for a Codex agent that is turned on in Settings.
   // Other agents, and every other server, keep the on-device voice.
   const codex = useCodexLive({
-    enabled: isFocused && writable && target.kind === "agent" && server?.kind === "termux",
+    enabled: writable && target.kind === "agent" && server?.kind === "termux",
+    focused: isFocused,
     serverId: server?.id ?? "",
     agentId: target.id,
     isCodex: failureAgent?.provider === "codex",
     texts: { failed: t("mobile.server.termux.liveFailed"), closed: t("mobile.server.termux.liveClosed") },
   });
   // The call bar and the mic follow the call of Codex when it is on, and the on-device conversation otherwise.
-  const talk = codex.live.available ? codex.live : live;
+  // A failed call keeps its bar, with the reason, until the next call starts.
+  const talk = codex.live.available || codex.live.open || codex.live.error ? codex.live : live;
   // The agent who speaks in a voice conversation: the agent of the chat, or the channel's leader, who
   // gives out the channel's tasks.
   const voiceAgent =
@@ -681,7 +682,7 @@ export function ChatView({
   // With no voice ready, the tap opens Settings > Voice, where the user downloads Supertonic 3 or adds
   // an ElevenLabs key.
   const composerVoice: ComposerVoice | undefined =
-    talk.available || talk.open
+    talk.available || talk.open || talk.error
       ? {
           ...liveVoice(talk, voiceAgent?.name ?? target.name, t),
           start: () => (talk === live && !replyVoiceReady() ? router.push("/settings/voice") : talk.start()),
@@ -1053,12 +1054,7 @@ export function ChatView({
     <GestureDetector gesture={edgeBackGesture}>
       <View className="flex-1" style={{ backgroundColor: background }}>
         {codex.mounted ? (
-          <CodexLiveBridge
-            dom={CODEX_BRIDGE_DOM}
-            ref={codex.bridge.ref}
-            onOffer={codex.bridge.onOffer}
-            onFailed={codex.bridge.onFailed}
-          />
+          <CodexLiveBridge ref={codex.bridge.ref} onOffer={codex.bridge.onOffer} onFailed={codex.bridge.onFailed} />
         ) : null}
         <View
           className="flex-1"
