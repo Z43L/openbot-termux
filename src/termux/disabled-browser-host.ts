@@ -1,9 +1,9 @@
 import type { BrowserControlState, BrowserTab } from "@openbot/contracts/ipc";
 import { Effect } from "effect";
+import type { AgentBrowserHost } from "../backend/agent/turn-lifecycle";
 import type { BrowserOperationError } from "../backend/browser-effects";
 import { browserFailure } from "../backend/browser-effects";
 import type { BrowserDynamicToolHooks } from "../backend/browser-tool-actions";
-import type { AgentBrowserHost } from "../backend/agent/turn-lifecycle";
 import type { DynamicToolCallParams, DynamicToolResult } from "../backend/protocol";
 
 const unsupported = () => Effect.fail(browserFailure(new Error("Browser and Computer Use are disabled on Termux.")));
@@ -51,7 +51,7 @@ export class DisabledBrowserHost implements AgentBrowserHost {
     return unsupported();
   }
 
-  userControlTabFor(_params: DynamicToolCallParams): string | null {
+  userControlTabFor(_params: DynamicToolCallParams): null {
     return null;
   }
 
@@ -63,5 +63,13 @@ export class DisabledBrowserHost implements AgentBrowserHost {
     _params: DynamicToolCallParams,
   ): Effect.Effect<{ inputId: string; documentId: string }, BrowserOperationError> {
     return unsupported();
+  }
+
+  shareTab(_tabId: string, _target: { agentId: string; threadId: string }): void {}
+
+  unshareThread(_threadId: string): void {}
+
+  agentTab(_tabId: string, _agentId: string): null {
+    return null;
   }
 }

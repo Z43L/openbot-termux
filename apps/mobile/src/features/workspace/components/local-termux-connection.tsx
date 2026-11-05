@@ -1,7 +1,8 @@
-import { type AgentEvent, isAgentEvent } from "@openbot/contracts/ipc";
+import { type AgentEvent, isAgentEvent, type VoiceLiveEvent } from "@openbot/contracts/ipc";
+import { isDynamicRecord } from "@openbot/contracts/runtime-values";
 import { useEffect } from "react";
 import { currentText } from "@/shared/lib/text";
-import type { LocalTermuxServerConfig } from "../model/local-termux-server";
+import { isVoiceLiveEvent, type LocalTermuxServerConfig } from "../model/local-termux-server";
 import { LocalTermuxTransport } from "../model/local-termux-transport";
 import type { RemoteTeamTransportRef } from "./remote-team-transport";
 import type { ServerConnectionHandle, ServerLoadContext } from "./server-connection";
@@ -13,6 +14,7 @@ export function LocalTermuxConnection({
   load,
   onStatus,
   onTeamEvent,
+  onVoiceLive,
 }: {
   config: LocalTermuxServerConfig;
   active: boolean;
@@ -20,6 +22,8 @@ export function LocalTermuxConnection({
   load(id: string, publicKey: string, client: RemoteTeamTransportRef, context: ServerLoadContext): Promise<void>;
   onStatus(id: string, state: "connecting" | "online" | "offline" | "error", message: string | null): void;
   onTeamEvent(id: string, event: AgentEvent): void;
+  /** Codex live voice events of the server, such as a transcript or the end of a session. */
+  onVoiceLive(id: string, event: VoiceLiveEvent): void;
 }) {
   useEffect(() => {
     if (!active) return;
@@ -43,8 +47,10 @@ export function LocalTermuxConnection({
         }
       } catch (error) {
         if (context.isCurrent()) {
-          const message = error instanceof Error ? error.message : currentText().t("mobile.server.local.unavailable");
-          onStatus(config.id, /authentication failed/iu.test(message) ? "error" : "offline", message);
+          const t = currentText().t;
+          const message = error instanceof Error ? error.message : t("mobile.server.termux.unavailable");
+          // A rejected token will not connect by itself: the server row shows the error, not a retry.
+          onStatus(config.id, message === t("mobile.server.termux.authFailed") ? "error" : "offline", message);
         }
       } finally {
         connectPending = false;
@@ -70,7 +76,10 @@ export function LocalTermuxConnection({
           socket.onmessage = (message) => {
             try {
               const event = JSON.parse(String(message.data));
-              if (isAgentEvent(event)) {
+              if (isDynamicRecord(event) && event.type === "voice-live") {
+                eventRetryMs = 1_000;
+                if (isVoiceLiveEvent(event.event)) onVoiceLive(config.id, event.event);
+              } else if (isAgentEvent(event)) {
                 eventRetryMs = 1_000;
                 onTeamEvent(config.id, event);
               }
@@ -96,6 +105,6 @@ export function LocalTermuxConnection({
       register(config.id, null);
       onStatus(config.id, "offline", null);
     };
-  }, [config, active, register, load, onStatus, onTeamEvent]);
+  }, [config, active, register, load, onStatus, onTeamEvent, onVoiceLive]);
   return null;
 }

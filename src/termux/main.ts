@@ -7,11 +7,14 @@ import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import {
   type AgentEvent,
   type AgentSummary,
+  type CodexLiveVoice,
   isAgentModel,
   isAgentProvider,
   isAvatarHue,
   isAvatarSeed,
+  isCodexLiveVoice,
   isReasoningEffort,
+  type VoiceLiveEvent,
 } from "@openbot/contracts/ipc";
 import { type DynamicRecord, isDynamicRecord } from "@openbot/contracts/runtime-values";
 import { createOpenBotLogger, toLogValue } from "@openbot/logging";
@@ -28,8 +31,17 @@ const logger = createOpenBotLogger("termux-server");
 const HOST = "127.0.0.1";
 const DEFAULT_PORT = 8787;
 const MAX_BODY_BYTES = 8_192;
+/** A WebRTC offer of a live voice session is a few kilobytes of SDP. */
+const MAX_VOICE_BODY_BYTES = 64_000;
 const DEFAULT_DATA_DIRECTORY = join(homedir(), ".local", "share", "openbot-termux");
 const TOKEN_FILE = "server-token";
+const VOICE_SETTINGS_FILE = "voice-live.json";
+
+/** The user's opt-in to Codex live voice. The audio goes to OpenAI only while it is on. */
+interface LiveVoiceSettings {
+  codexLive: boolean;
+  codexLiveVoice: CodexLiveVoice | null;
+}
 
 interface ServerState {
   agents: AgentStore;
@@ -43,6 +55,10 @@ interface ServerState {
   eventClients: Set<ServerResponse>;
   webSocketServer: WebSocketServer;
   webSocketClients: Set<WebSocket>;
+  voiceSettingsPath: string;
+  voiceSettings: LiveVoiceSettings;
+  /** The live voice sessions that this server started, so that a stop can check its owner. */
+  liveSessions: Set<string>;
 }
 
 async function main(): Promise<void> {
@@ -62,6 +78,7 @@ async function main(): Promise<void> {
   await Effect.runPromise(service.initialize());
   const workflows = await Effect.runPromise(createTermuxWorkflows(agents, mailbox, service));
   const token = await loadToken(join(dataDirectory, TOKEN_FILE));
+  const voiceSettingsPath = join(dataDirectory, VOICE_SETTINGS_FILE);
   const server = createServer((request, response) => {
     void handleRequest(request, response, state).catch((error: unknown) => {
       logger.error("A Termux API request failed.", toLogValue(error));
@@ -85,6 +102,9 @@ async function main(): Promise<void> {
     eventClients: new Set(),
     webSocketServer,
     webSocketClients: new Set(),
+    voiceSettingsPath,
+    voiceSettings: await loadVoiceSettings(voiceSettingsPath),
+    liveSessions: new Set(),
   };
   server.on("upgrade", (request, socket, head) => {
     const host = request.headers.host;
@@ -111,6 +131,7 @@ async function main(): Promise<void> {
     });
   });
   service.on("event", (event) => broadcastEvent(state, event));
+  service.on("liveVoice", (event) => broadcastVoiceLive(state, event));
   state.port = await listen(server);
   logger.info(`Termux API listening on ${HOST}:${state.port}.`);
   process.stdout.write(`OpenBot Termux API: http://${HOST}:${state.port}\n`);
@@ -205,6 +226,64 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
     return;
   }
 
+  if (path === "/api/voice/live" && request.method === "GET") {
+    writeJson(response, 200, state.voiceSettings);
+    return;
+  }
+  if (path === "/api/voice/live" && request.method === "PUT") {
+    const body = await readJsonRecord(request);
+    if (
+      !body ||
+      typeof body.codexLive !== "boolean" ||
+      !(body.codexLiveVoice === null || isCodexLiveVoice(body.codexLiveVoice))
+    ) {
+      writeJson(response, 400, { error: "invalid_voice_settings" });
+      return;
+    }
+    state.voiceSettings = { codexLive: body.codexLive, codexLiveVoice: body.codexLiveVoice };
+    await saveVoiceSettings(state.voiceSettingsPath, state.voiceSettings);
+    writeJson(response, 200, state.voiceSettings);
+    return;
+  }
+  if (path === "/api/voice/live/start" && request.method === "POST") {
+    // The opt-in is checked here, as the desktop host checks it: the voice goes to OpenAI only while it is on.
+    if (!state.voiceSettings.codexLive) {
+      writeJson(response, 409, { error: "live_voice_off" });
+      return;
+    }
+    const body = await readJsonRecord(request, MAX_VOICE_BODY_BYTES);
+    if (!body || typeof body.agentId !== "string" || typeof body.sdp !== "string" || body.sdp.length === 0) {
+      writeJson(response, 400, { error: "invalid_live_voice_start" });
+      return;
+    }
+    if (!state.service.listAgents().some((agent) => agent.id === body.agentId)) {
+      writeJson(response, 404, { error: "agent_not_found" });
+      return;
+    }
+    try {
+      const session = await Effect.runPromise(
+        state.service.startLiveVoice({ agentId: body.agentId, sdp: body.sdp }, state.voiceSettings.codexLiveVoice),
+      );
+      state.liveSessions.add(session.sessionId);
+      writeJson(response, 201, session);
+    } catch (error) {
+      logger.warn("A Codex live voice session could not start.", toLogValue(error));
+      writeJson(response, 503, { error: "live_voice_failed" });
+    }
+    return;
+  }
+  if (path === "/api/voice/live/stop" && request.method === "POST") {
+    const body = await readJsonRecord(request);
+    if (!body || typeof body.sessionId !== "string" || !state.liveSessions.has(body.sessionId)) {
+      writeJson(response, 404, { error: "live_voice_not_found" });
+      return;
+    }
+    state.liveSessions.delete(body.sessionId);
+    await Effect.runPromise(state.service.stopLiveVoice(body.sessionId));
+    writeJson(response, 200, { stopped: true });
+    return;
+  }
+
   const agentRoute = /^\/api\/agents\/([A-Za-z0-9-]+)(?:\/(conversation|conversation-page|messages))?$/u.exec(path);
   const agentId = agentRoute?.[1];
   if (agentId && !state.service.listAgents().some((agent) => agent.id === agentId)) {
@@ -270,9 +349,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
   writeJson(response, 404, { error: "not_found" });
 }
 
-async function readJsonRecord(request: IncomingMessage): Promise<DynamicRecord | null> {
+async function readJsonRecord(request: IncomingMessage, limit = MAX_BODY_BYTES): Promise<DynamicRecord | null> {
   try {
-    const value = JSON.parse(await readBody(request));
+    const value = JSON.parse(await readBody(request, limit));
     return isDynamicRecord(value) ? value : null;
   } catch {
     return null;
@@ -324,13 +403,13 @@ async function readCreateInput(request: IncomingMessage): Promise<{
   };
 }
 
-async function readBody(request: IncomingMessage): Promise<string> {
+async function readBody(request: IncomingMessage, limit = MAX_BODY_BYTES): Promise<string> {
   let size = 0;
   const chunks: Buffer[] = [];
   for await (const chunk of request) {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += bytes.length;
-    if (size > MAX_BODY_BYTES) throw new Error("body_too_large");
+    if (size > limit) throw new Error("body_too_large");
     chunks.push(bytes);
   }
   return Buffer.concat(chunks).toString("utf8");
@@ -379,6 +458,36 @@ function broadcastEvent(state: ServerState, event: AgentEvent): void {
   for (const client of state.webSocketClients) {
     if (client.readyState === WebSocket.OPEN) client.send(webSocketMessage);
   }
+}
+
+/** A live voice event goes to the phone as `voice-live`, beside the agent events, which keep their shape. */
+function broadcastVoiceLive(state: ServerState, event: VoiceLiveEvent): void {
+  if (event.type === "ended") state.liveSessions.delete(event.sessionId);
+  const payload = JSON.stringify({ type: "voice-live", event });
+  for (const response of state.eventClients) {
+    if (!response.write(`event: openbot\ndata: ${payload}\n\n`)) state.eventClients.delete(response);
+  }
+  for (const client of state.webSocketClients) {
+    if (client.readyState === WebSocket.OPEN) client.send(payload);
+  }
+}
+
+/** A missing or damaged file gives the default: the voice stays off until the user turns it on. */
+async function loadVoiceSettings(path: string): Promise<LiveVoiceSettings> {
+  const off: LiveVoiceSettings = { codexLive: false, codexLiveVoice: null };
+  const value = await readFile(path, "utf8")
+    .then((text) => JSON.parse(text))
+    .catch(() => null);
+  if (!isDynamicRecord(value) || typeof value.codexLive !== "boolean") return off;
+  return {
+    codexLive: value.codexLive,
+    codexLiveVoice: isCodexLiveVoice(value.codexLiveVoice) ? value.codexLiveVoice : null,
+  };
+}
+
+async function saveVoiceSettings(path: string, settings: LiveVoiceSettings): Promise<void> {
+  await writeFile(path, `${JSON.stringify(settings)}\n`, { encoding: "utf8", mode: 0o600 });
+  await chmod(path, 0o600);
 }
 
 async function loadToken(path: string): Promise<Buffer> {

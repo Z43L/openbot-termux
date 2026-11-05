@@ -27,10 +27,10 @@ interface LocalAgent {
 }
 
 const AUTHOR_KEYS = {
-  user: "mobile.server.local.author.user",
-  assistant: "mobile.server.local.author.assistant",
-  agent: "mobile.server.local.author.agent",
-  system: "mobile.server.local.author.system",
+  user: "mobile.server.termux.author.user",
+  assistant: "mobile.server.termux.author.assistant",
+  agent: "mobile.server.termux.author.agent",
+  system: "mobile.server.termux.author.system",
 } as const satisfies Record<ConversationMessage["author"], MobileTextKey>;
 
 export default function LocalTermuxScreen() {
@@ -41,7 +41,7 @@ export default function LocalTermuxScreen() {
   const [agents, setAgents] = useState<LocalAgent[]>([]);
   const [agentId, setAgentId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Array<{ id: string; author: string; text: string }>>([]);
-  const [serverName, setServerName] = useState(() => t("mobile.server.local.localMode"));
+  const [serverName, setServerName] = useState(() => t("mobile.server.termux.localMode"));
   const [serverUrl, setServerUrl] = useState("http://127.0.0.1:8787");
   const [token, setToken] = useState("");
   const [agentName, setAgentName] = useState("");
@@ -57,11 +57,11 @@ export default function LocalTermuxScreen() {
       const response = await fetch(`${config.url}/api/agents`, {
         headers: { authorization: `Bearer ${config.token}`, accept: "application/json" },
       });
-      if (response.status === 401) throw new Error(t("mobile.server.local.authFailed"));
-      if (!response.ok) throw new Error(t("mobile.server.local.requestFailed", { status: response.status }));
+      if (response.status === 401) throw new Error(t("mobile.server.termux.authFailed"));
+      if (!response.ok) throw new Error(t("mobile.server.termux.requestFailed", { status: response.status }));
       const value = await response.json();
       if (!isDynamicRecord(value) || !Array.isArray(value.agents))
-        throw new Error(t("mobile.server.local.invalidResponse"));
+        throw new Error(t("mobile.server.termux.invalidResponse"));
       setAgents(decodeAgentSummaries(value.agents));
     },
     [t],
@@ -72,8 +72,8 @@ export default function LocalTermuxScreen() {
       const response = await fetch(`${config.url}/api/agents/${encodeURIComponent(id)}/conversation-page?limit=100`, {
         headers: { authorization: `Bearer ${config.token}`, accept: "application/json" },
       });
-      if (response.status === 401) throw new Error(t("mobile.server.local.authFailed"));
-      if (!response.ok) throw new Error(t("mobile.server.local.requestFailed", { status: response.status }));
+      if (response.status === 401) throw new Error(t("mobile.server.termux.authFailed"));
+      if (!response.ok) throw new Error(t("mobile.server.termux.requestFailed", { status: response.status }));
       const page = decodeConversationPage(await response.json());
       setMessages(
         page.messages.filter(isConversationMessage).map(({ id: messageId, author, text }) => ({
@@ -116,13 +116,13 @@ export default function LocalTermuxScreen() {
           await connect(first).catch((cause: unknown) => {
             if (active) {
               setServer(first);
-              setError(cause instanceof Error ? cause.message : t("mobile.server.local.unavailable"));
+              setError(cause instanceof Error ? cause.message : t("mobile.server.termux.unavailable"));
             }
           });
         }
       })
       .catch((cause: unknown) => {
-        if (active) setError(cause instanceof Error ? cause.message : t("mobile.server.local.savedSettingsInvalid"));
+        if (active) setError(cause instanceof Error ? cause.message : t("mobile.server.termux.savedSettingsInvalid"));
       });
     return () => {
       active = false;
@@ -136,7 +136,7 @@ export default function LocalTermuxScreen() {
       void readConversation(server, agentId).catch((cause: unknown) => {
         if (active) {
           setConnected(false);
-          setError(cause instanceof Error ? cause.message : t("mobile.server.local.unavailable"));
+          setError(cause instanceof Error ? cause.message : t("mobile.server.termux.unavailable"));
         }
       });
     refresh();
@@ -161,7 +161,7 @@ export default function LocalTermuxScreen() {
       } catch (cause) {
         if (active) {
           setConnected(false);
-          setError(cause instanceof Error ? cause.message : t("mobile.server.local.unavailable"));
+          setError(cause instanceof Error ? cause.message : t("mobile.server.termux.unavailable"));
         }
       }
     };
@@ -186,12 +186,12 @@ export default function LocalTermuxScreen() {
         url: normalizeLoopbackUrl(serverUrl),
         token: token.trim() || (server?.url === normalizeLoopbackUrl(serverUrl) ? server.token : ""),
       };
-      if (!config.token) throw new Error(t("mobile.server.local.savedTokenMissing"));
+      if (!config.token) throw new Error(t("mobile.server.termux.savedTokenMissing"));
       await connect(config);
       setToken("");
     } catch (cause) {
       setConnected(false);
-      setError(cause instanceof Error ? cause.message : t("mobile.server.local.connectFailed"));
+      setError(cause instanceof Error ? cause.message : t("mobile.server.termux.connectFailed"));
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -215,11 +215,11 @@ export default function LocalTermuxScreen() {
           initialMessage: prompt.trim().slice(0, INPUT_LIMITS.messageText),
         }),
       });
-      if (response.status === 401) throw new Error(t("mobile.server.local.authFailed"));
-      if (!response.ok) throw new Error(t("mobile.server.local.requestFailed", { status: response.status }));
+      if (response.status === 401) throw new Error(t("mobile.server.termux.authFailed"));
+      if (!response.ok) throw new Error(t("mobile.server.termux.requestFailed", { status: response.status }));
       const value = await response.json();
       if (!isDynamicRecord(value) || !isDynamicRecord(value.agent) || !isString(value.agent.id))
-        throw new Error(t("mobile.server.local.invalidResponse"));
+        throw new Error(t("mobile.server.termux.invalidResponse"));
       const created = { id: value.agent.id };
       setAgentName("");
       setPrompt("");
@@ -227,7 +227,7 @@ export default function LocalTermuxScreen() {
       setAgentId(created.id);
       await readConversation(server, created.id);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("mobile.server.local.requestFailed", { status: 0 }));
+      setError(cause instanceof Error ? cause.message : t("mobile.server.termux.requestFailed", { status: 0 }));
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -247,11 +247,11 @@ export default function LocalTermuxScreen() {
         headers: { authorization: `Bearer ${server.token}`, "content-type": "application/json" },
         body: JSON.stringify({ text, clientMessageId: Crypto.randomUUID() }),
       });
-      if (response.status === 401) throw new Error(t("mobile.server.local.authFailed"));
-      if (!response.ok) throw new Error(t("mobile.server.local.requestFailed", { status: response.status }));
+      if (response.status === 401) throw new Error(t("mobile.server.termux.authFailed"));
+      if (!response.ok) throw new Error(t("mobile.server.termux.requestFailed", { status: response.status }));
       await readConversation(server, agentId);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("mobile.server.local.requestFailed", { status: 0 }));
+      setError(cause instanceof Error ? cause.message : t("mobile.server.termux.requestFailed", { status: 0 }));
       setMessage(text);
     } finally {
       busyRef.current = false;
@@ -261,28 +261,28 @@ export default function LocalTermuxScreen() {
 
   return (
     <>
-      <Stack.Screen options={{ title: t("mobile.server.local.title") }} />
+      <Stack.Screen options={{ title: t("mobile.server.termux.title") }} />
       <SheetScrollView
         className="bg-background"
         contentContainerClassName="gap-4 px-5 pb-safe-offset-5 pt-5"
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
       >
-        <Typography.Heading type="h2">{server?.name ?? t("mobile.server.local.title")}</Typography.Heading>
+        <Typography.Heading type="h2">{server?.name ?? t("mobile.server.termux.title")}</Typography.Heading>
         <Typography.Paragraph color="muted">
-          {connected ? t("mobile.server.local.statusConnected") : t("mobile.server.local.statusDisconnected")}
+          {connected ? t("mobile.server.termux.statusConnected") : t("mobile.server.termux.statusDisconnected")}
         </Typography.Paragraph>
         {error ? <Typography.Paragraph className="text-danger-text">{error}</Typography.Paragraph> : null}
-        <SheetFormField label={t("mobile.server.local.name")} value={serverName} onChangeText={setServerName} />
+        <SheetFormField label={t("mobile.server.termux.name")} value={serverName} onChangeText={setServerName} />
         <SheetFormField
-          label={t("mobile.server.local.url")}
+          label={t("mobile.server.termux.url")}
           value={serverUrl}
           onChangeText={setServerUrl}
           autoCapitalize="none"
           autoCorrect={false}
         />
         <SheetFormField
-          label={t("mobile.server.local.token")}
+          label={t("mobile.server.termux.token")}
           value={token}
           onChangeText={setToken}
           secureTextEntry
@@ -290,14 +290,14 @@ export default function LocalTermuxScreen() {
           autoCorrect={false}
         />
         <Button isDisabled={busy} onPress={() => void saveAndConnect()}>
-          <Button.Label>{t("mobile.server.local.connect")}</Button.Label>
+          <Button.Label>{t("mobile.server.termux.connect")}</Button.Label>
         </Button>
         {server ? (
           <>
             {agentId ? (
               <>
                 <Button variant="secondary" onPress={() => setAgentId(null)}>
-                  <Button.Label>{t("mobile.server.local.agentList")}</Button.Label>
+                  <Button.Label>{t("mobile.server.termux.agentList")}</Button.Label>
                 </Button>
                 {messages.map((item) => (
                   <View key={item.id} className="rounded-2xl bg-grouped p-4">
@@ -306,24 +306,24 @@ export default function LocalTermuxScreen() {
                   </View>
                 ))}
                 <SheetFormField
-                  label={t("mobile.server.local.message")}
+                  label={t("mobile.server.termux.message")}
                   value={message}
                   onChangeText={setMessage}
                   multiline
                 />
                 <Button isDisabled={busy || !message.trim()} onPress={() => void sendMessage()}>
-                  <Button.Label>{t("mobile.server.local.send")}</Button.Label>
+                  <Button.Label>{t("mobile.server.termux.send")}</Button.Label>
                 </Button>
               </>
             ) : (
               <>
-                <Typography.Heading type="h4">{t("mobile.server.local.agentList")}</Typography.Heading>
+                <Typography.Heading type="h4">{t("mobile.server.termux.agentList")}</Typography.Heading>
                 {agents.map((agent) => (
                   <Button key={agent.id} variant="secondary" onPress={() => setAgentId(agent.id)}>
                     <Button.Label>{agent.name}</Button.Label>
                   </Button>
                 ))}
-                <Typography.Heading type="h4">{t("mobile.server.local.createAgent")}</Typography.Heading>
+                <Typography.Heading type="h4">{t("mobile.server.termux.createAgent")}</Typography.Heading>
                 <SheetFormField
                   label={t("mobile.agent.form.name")}
                   value={agentName}
@@ -331,20 +331,20 @@ export default function LocalTermuxScreen() {
                   maxLength={INPUT_LIMITS.agentName}
                 />
                 <SheetFormField
-                  label={t("mobile.server.local.firstMessage")}
+                  label={t("mobile.server.termux.firstMessage")}
                   value={prompt}
                   onChangeText={setPrompt}
                   multiline
                 />
                 <Button isDisabled={busy || !agentName.trim() || !prompt.trim()} onPress={() => void createAgent()}>
-                  <Button.Label>{t("mobile.server.local.createAndRun")}</Button.Label>
+                  <Button.Label>{t("mobile.server.termux.createAndRun")}</Button.Label>
                 </Button>
               </>
             )}
           </>
         ) : null}
         <Button variant="secondary" onPress={() => router.replace({ pathname: "/", params: { mode: "cloud" } })}>
-          <Button.Label>{t("mobile.server.local.cloudAccount")}</Button.Label>
+          <Button.Label>{t("mobile.server.termux.cloudAccount")}</Button.Label>
         </Button>
         <View style={{ height: Math.max(insets.bottom, 8) }} />
       </SheetScrollView>

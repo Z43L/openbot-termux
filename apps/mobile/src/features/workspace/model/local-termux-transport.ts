@@ -1,4 +1,4 @@
-import { isDynamicRecord } from "@openbot/contracts/runtime-values";
+import { isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
 import { TEAM_AGENT_CREATE_MODEL_CAPABILITY } from "@openbot/contracts/team-protocol/current";
 import { type TeamHttpCodec, teamHttpCodec } from "@openbot/contracts/team-protocol/http-codecs";
 import { teamSideRouteCodec } from "@openbot/contracts/team-protocol/side-routes";
@@ -18,15 +18,15 @@ export class LocalTermuxTransport implements RemoteTeamTransportRef {
     this.#config = { ...config, url: normalizeLoopbackUrl(config.url) };
   }
 
-  async connect(): Promise<void> {
+  async connect(_hostId?: string, _hostPublicKey?: string): Promise<void> {
     const t = currentText().t;
     const response = await this.#fetch("/health", false);
-    if (!response.ok) throw new Error(t("mobile.server.local.unavailable"));
-    if (!isHealthy(await response.json())) throw new Error(t("mobile.server.local.unhealthy"));
+    if (!response.ok) throw new Error(t("mobile.server.termux.unavailable"));
+    if (!isHealthy(await response.json())) throw new Error(t("mobile.server.termux.unhealthy"));
     const agents = await this.#fetch("/api/agents");
-    if (agents.status === 401) throw new Error(t("mobile.server.local.authFailed"));
-    if (!agents.ok) throw new Error(t("mobile.server.local.requestFailed", { status: agents.status }));
-    if (!hasAgentList(await agents.json())) throw new Error(t("mobile.server.local.invalidResponse"));
+    if (agents.status === 401) throw new Error(t("mobile.server.termux.authFailed"));
+    if (!agents.ok) throw new Error(t("mobile.server.termux.requestFailed", { status: agents.status }));
+    if (!hasAgentList(await agents.json())) throw new Error(t("mobile.server.termux.invalidResponse"));
     this.#connected = true;
   }
 
@@ -40,10 +40,12 @@ export class LocalTermuxTransport implements RemoteTeamTransportRef {
     decode: (value: unknown) => T,
     body?: TeamProtocolV2Json,
     upload?: RemoteFileUpload,
+    // The local server sends the bytes at once, so the progress of an upload is not reported.
+    _onUploadProgress?: (fraction: number) => void,
   ): Promise<T> {
     const t = currentText().t;
-    if (!this.#connected) throw new Error(t("mobile.server.local.disconnected"));
-    if (!isServedRoute(path)) throw new Error(t("mobile.server.local.unsupported"));
+    if (!this.#connected) throw new Error(t("mobile.server.termux.disconnected"));
+    if (!isServedRoute(path)) throw new Error(t("mobile.server.termux.unsupported"));
     // The server sends a file as it is. The app reads it as `{ name, mimeType, base64 }`, as the remote
     // client builds it, and it sends a file from base64 the same way.
     if (upload) return decode(await this.#upload(method, path, upload));
@@ -77,12 +79,44 @@ export class LocalTermuxTransport implements RemoteTeamTransportRef {
     return null;
   }
 
+  /** Starts Codex live voice. `sdp` is the WebRTC offer of the phone; the answer comes back with the session. */
+  async startLiveVoice(agentId: string, sdp: string): Promise<{ sessionId: string; sdp: string }> {
+    const response = await this.#fetch("/api/voice/live/start", true, "POST", { agentId, sdp });
+    const payload = await response.json().catch(() => null);
+    this.#requireOk(response);
+    if (!isDynamicRecord(payload) || !isString(payload.sessionId) || !isString(payload.sdp)) {
+      throw new Error(currentText().t("mobile.server.termux.invalidResponse"));
+    }
+    return { sessionId: payload.sessionId, sdp: payload.sdp };
+  }
+
+  async stopLiveVoice(sessionId: string): Promise<void> {
+    const response = await this.#fetch("/api/voice/live/stop", true, "POST", { sessionId });
+    this.#requireOk(response);
+  }
+
+  /** The Codex live voice opt-in and voice of the local server, as the server stores them. */
+  async readLiveVoiceSettings(): Promise<LocalLiveVoiceSettings> {
+    const response = await this.#fetch("/api/voice/live");
+    const payload = await response.json().catch(() => null);
+    this.#requireOk(response);
+    return decodeLiveVoiceSettings(payload);
+  }
+
+  async saveLiveVoiceSettings(settings: LocalLiveVoiceSettings): Promise<LocalLiveVoiceSettings> {
+    const response = await this.#fetch("/api/voice/live", true, "PUT", settings);
+    const payload = await response.json().catch(() => null);
+    this.#requireOk(response);
+    return decodeLiveVoiceSettings(payload);
+  }
+
   #requireOk(response: Response): void {
     if (response.ok) return;
     const t = currentText().t;
-    if (response.status === 401) throw new Error(t("mobile.server.local.authFailed"));
-    if (response.status === 501) throw new Error(t("mobile.server.local.unsupported"));
-    throw new Error(t("mobile.server.local.requestFailed", { status: response.status }));
+    if (response.status === 401) throw new Error(t("mobile.server.termux.authFailed"));
+    if (response.status === 501) throw new Error(t("mobile.server.termux.unsupported"));
+    if (response.status === 409) throw new Error(t("mobile.server.termux.liveVoiceOff"));
+    throw new Error(t("mobile.server.termux.requestFailed", { status: response.status }));
   }
 
   async #download(path: string): Promise<{ name: string; mimeType: string; base64: string }> {
@@ -168,6 +202,18 @@ function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
 /** The server answers the Team API routes that its services can serve, and refuses the rest with a 404. */
 function isServedRoute(path: string): boolean {
   return path.startsWith("/v1/");
+}
+
+export type LocalLiveVoiceSettings = {
+  codexLive: boolean;
+  codexLiveVoice: string | null;
+};
+
+function decodeLiveVoiceSettings(value: unknown): LocalLiveVoiceSettings {
+  if (!isDynamicRecord(value) || typeof value.codexLive !== "boolean") {
+    throw new Error(currentText().t("mobile.server.termux.invalidResponse"));
+  }
+  return { codexLive: value.codexLive, codexLiveVoice: isString(value.codexLiveVoice) ? value.codexLiveVoice : null };
 }
 
 function isHealthy(value: unknown): boolean {
